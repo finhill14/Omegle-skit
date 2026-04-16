@@ -81,9 +81,7 @@ async function getToken() {
 
 function logout() {
   sessionStorage.clear();
-  document.cookie = 'refresh_token=; Max-Age=0; Path=/;';
-  goTo('screen-login');
-  $('btn-logout').hidden = true;
+  window.location.href = '/api/auth/logout';
 }
 
 // ─── Drive API ───────────────────────────────────────────
@@ -93,7 +91,8 @@ async function driveGet(path, params = {}) {
   Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
   const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
   if (res.status === 401) {
-    await refreshAccessToken();
+    const refreshed = await refreshAccessToken();
+    if (!refreshed) throw new Error('Session expired. Please sign in again.');
     const retry = await fetch(url, { headers: { Authorization: `Bearer ${state.accessToken}` } });
     if (!retry.ok) throw new Error(`Drive API error: ${retry.status}`);
     return retry.json();
@@ -148,9 +147,11 @@ async function downloadFile(fileId, onProgress) {
   });
   if (!res.ok) throw new Error(`Download failed: ${res.status}`);
 
+  const contentType = res.headers.get('content-type') || 'video/mp4';
   const contentLength = res.headers.get('content-length');
+
   if (!contentLength || !res.body) {
-    return new Blob([await res.arrayBuffer()]);
+    return new Blob([await res.arrayBuffer()], { type: contentType });
   }
 
   const reader = res.body.getReader();
@@ -166,7 +167,7 @@ async function downloadFile(fileId, onProgress) {
     if (onProgress) onProgress(received / total);
   }
 
-  return new Blob(chunks);
+  return new Blob(chunks, { type: contentType });
 }
 
 async function uploadToDrive(blob, name, folderId, onProgress) {
@@ -229,7 +230,8 @@ async function mergeVideos(sourceBlob, webcamBlob, onProgress) {
 
   const { fetchFile } = await import('https://unpkg.com/@ffmpeg/util@0.12.1/dist/esm/index.js');
 
-  const sourceExt = (state.videos[state.currentIndex]?.name || 'video.mp4').split('.').pop() || 'mp4';
+  const sourceName = state.videos[state.currentIndex]?.name || 'video.mp4';
+  const sourceExt = sourceName.includes('.') ? sourceName.split('.').pop() : 'mp4';
   const webcamExt = state.webcamMime.includes('mp4') ? 'mp4' : 'webm';
 
   const progressHandler = ({ progress }) => {
@@ -287,7 +289,7 @@ async function mergeVideos(sourceBlob, webcamBlob, onProgress) {
   await ffmpeg.deleteFile(`webcam.${webcamExt}`).catch(() => {});
   await ffmpeg.deleteFile('output.mp4').catch(() => {});
 
-  return new Blob([data.buffer], { type: 'video/mp4' });
+  return new Blob([data], { type: 'video/mp4' });
 }
 
 // ─── Camera & Recording ─────────────────────────────────
@@ -448,13 +450,18 @@ previewTop.addEventListener('ended', () => {
   btnPlayPreview.textContent = 'Play Preview';
 });
 
-$('btn-rerecord').addEventListener('click', () => {
+$('btn-rerecord').addEventListener('click', async () => {
   previewTop.pause();
   previewBottom.pause();
   clearSync();
   recTimer.textContent = '00:00';
   recTimer.hidden = true;
-  loadCurrentVideo();
+  try {
+    await initCamera();
+    goTo('screen-record');
+  } catch (err) {
+    alert('Camera access failed: ' + err.message);
+  }
 });
 
 $('btn-approve').addEventListener('click', () => {
@@ -549,8 +556,13 @@ async function loadVideoList() {
       await loadCurrentVideo();
     }
   } catch (err) {
-    alert('Failed to load videos: ' + err.message);
-    goTo('screen-login');
+    if (err.message.includes('Session expired') || err.message.includes('Not authenticated')) {
+      goTo('screen-login');
+      $('btn-logout').hidden = true;
+    } else {
+      alert('Failed to load videos: ' + err.message);
+      goTo('screen-empty');
+    }
   }
 }
 
@@ -585,20 +597,30 @@ async function loadCurrentVideo() {
 
     $('loading-progress').hidden = true;
     $('loading-bar').style.width = '0%';
-
-    await initCamera();
-    goTo('screen-record');
   } catch (err) {
-    alert('Failed to load video: ' + err.message);
-    goTo('screen-loading');
-    $('loading-status').textContent = 'Error loading video. Retrying...';
-    setTimeout(() => loadCurrentVideo(), 2000);
+    $('loading-progress').hidden = true;
+    alert('Failed to download video: ' + err.message);
+    goTo('screen-empty');
+    return;
   }
+
+  try {
+    await initCamera();
+  } catch (err) {
+    alert('Camera access denied. Please allow camera and microphone access and reload the page.');
+    goTo('screen-empty');
+    return;
+  }
+
+  goTo('screen-record');
 }
 
 $('btn-skip').addEventListener('click', () => {
+  if (isRecording) {
+    if (mediaRecorder) mediaRecorder.onstop = null;
+    stopRecording();
+  }
   stopCamera();
-  if (isRecording) stopRecording();
   state.currentIndex++;
   if (state.currentIndex >= state.videos.length) {
     goTo('screen-complete');
