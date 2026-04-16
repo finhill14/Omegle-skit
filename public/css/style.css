@@ -1,0 +1,282 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: #0a0a0a;
+  color: #fff;
+  min-height: 100vh;
+}
+
+header {
+  text-align: center;
+  padding: 1rem;
+  background: #111;
+  border-bottom: 1px solid #222;
+}
+
+header h1 {
+  font-size: 1.4rem;
+  font-weight: 600;
+  color: #4fc3f7;
+}
+
+main {
+  max-width: 600px;
+  margin: 0 auto;
+  padding: 1rem;
+}
+
+.screen {
+  display: none;
+}
+
+.screen.active {
+  display: block;
+}
+
+h2 {
+  text-align: center;
+  margin-bottom: 0.5rem;
+  font-size: 1.2rem;
+}
+
+p {
+  text-align: center;
+  color: #aaa;
+  margin-bottom: 1rem;
+  font-size: 0.9rem;
+}
+
+.dropzone {
+  border: 2px dashed #333;
+  border-radius: 12px;
+  padding: 3rem 2rem;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.dropzone:hover,
+.dropzone.dragover {
+  border-color: #4fc3f7;
+  background: rgba(79, 195, 247, 0.05);
+}
+
+.dropzone-icon {
+  font-size: 3rem;
+  display: block;
+  margin-bottom: 1rem;
+}
+
+.or {
+  color: #555;
+  margin: 0.5rem 0;
+}
+
+.file-btn {
+  display: inline-block;
+  padding: 0.6rem 1.5rem;
+  background: #4fc3f7;
+  color: #000;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 600;
+  transition: background 0.2s;
+}
+
+.file-btn:hover {
+  background: #81d4fa;
+}
+
+.progress-container {
+  margin-top: 1.5rem;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.progress-bar {
+  flex: 1;
+  height: 8px;
+  background: #222;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: #4fc3f7;
+  border-radius: 4px;
+  width: 0%;
+  transition: width 0.3s;
+}
+
+.video-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 1rem;
+}
+
+.video-half {
+  position: relative;
+  background: #111;
+  border-radius: 8px;
+  overflow: hidden;
+  aspect-ratio: 9/8;
+}
+
+.video-half video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.video-label {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  background: rgba(0, 0, 0, 0.7);
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  color: #aaa;
+}
+
+#webcam-preview {
+  transform: scaleX(-1);
+}
+
+.controls {
+  display: flex;
+  justify-content: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-top: 1rem;
+}
+
+.btn {
+  padding: 0.7rem 1.5rem;
+  border: none;
+  border-radius: 8px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s, transform 0.1s;
+  color: #fff;
+  background: #333;
+}
+
+.btn:hover {
+  background: #444;
+}
+
+.btn:active {
+  transform: scale(0.97);
+}
+
+.btn-record {
+  background: #e53935;
+  color: #fff;
+}
+
+.btn-record:hover {
+  background: #ef5350;
+}
+
+.btn-record.recording {
+  background: #b71c1c;
+  animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+.btn-secondary {
+  background: #222;
+  border: 1px solid #444;
+}
+
+.btn-secondary:hover {
+  background: #333;
+}
+
+.btn-approve {
+  background: #43a047;
+  color: #fff;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+}
+
+.btn-approve:hover {
+  background: #66bb6a;
+}
+
+.timer {
+  font-size: 1.2rem;
+  font-variant-numeric: tabular-nums;
+  color: #e53935;
+  display: flex;
+  align-items: center;
+}
+
+.preview-container {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-width: 400px;
+  margin: 0 auto 1rem;
+  aspect-ratio: 9/16;
+}
+
+.preview-container .video-half {
+  flex: 1;
+  aspect-ratio: auto;
+}
+
+#screen-done {
+  text-align: center;
+}
+
+#screen-done h2 {
+  margin-bottom: 1.5rem;
+}
+
+#screen-done .progress-container {
+  max-width: 400px;
+  margin: 0 auto 1.5rem;
+}
+
+#done-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+}
+
+#done-state .btn {
+  min-width: 200px;
+}
+
+@media (max-width: 480px) {
+  main {
+    padding: 0.5rem;
+  }
+
+  .dropzone {
+    padding: 2rem 1rem;
+  }
+
+  .btn {
+    padding: 0.6rem 1rem;
+    font-size: 0.9rem;
+  }
+}
