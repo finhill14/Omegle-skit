@@ -5,12 +5,15 @@ const fs = require('fs');
 
 const router = express.Router();
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     const sessionId = req.headers['x-session-id'];
-    if (!sessionId) return cb(new Error('Missing session ID'));
-    const dir = path.join(__dirname, '..', 'uploads', sessionId);
-    if (!fs.existsSync(dir)) return cb(new Error('Invalid session ID'));
+    if (!sessionId || !UUID_RE.test(sessionId)) return cb(new Error('Invalid session ID'));
+    const uploadsDir = path.resolve(__dirname, '..', 'uploads');
+    const dir = path.join(uploadsDir, sessionId);
+    if (!dir.startsWith(uploadsDir) || !fs.existsSync(dir)) return cb(new Error('Invalid session ID'));
     cb(null, dir);
   },
   filename: (req, file, cb) => {

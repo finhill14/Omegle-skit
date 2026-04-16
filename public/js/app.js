@@ -222,12 +222,21 @@
   const btnRerecord = document.getElementById('btn-rerecord');
   const btnApprove = document.getElementById('btn-approve');
 
+  let syncInterval = null;
+
   function initPreviewScreen() {
     previewTop.src = state.prerecordedUrl;
     previewBottom.src = state.webcamUrl;
     previewTop.load();
     previewBottom.load();
     btnPlayPreview.textContent = 'Play Preview';
+  }
+
+  function clearSync() {
+    if (syncInterval) {
+      clearInterval(syncInterval);
+      syncInterval = null;
+    }
   }
 
   btnPlayPreview.addEventListener('click', () => {
@@ -238,9 +247,10 @@
       previewBottom.play();
       btnPlayPreview.textContent = 'Pause';
 
-      const syncInterval = setInterval(() => {
+      clearSync();
+      syncInterval = setInterval(() => {
         if (previewTop.paused || previewTop.ended) {
-          clearInterval(syncInterval);
+          clearSync();
           return;
         }
         const drift = Math.abs(previewTop.currentTime - previewBottom.currentTime);
@@ -251,6 +261,7 @@
     } else {
       previewTop.pause();
       previewBottom.pause();
+      clearSync();
       btnPlayPreview.textContent = 'Play Preview';
     }
   });
@@ -263,6 +274,9 @@
   btnRerecord.addEventListener('click', () => {
     previewTop.pause();
     previewBottom.pause();
+    clearSync();
+    recTimer.textContent = '00:00';
+    recTimer.hidden = true;
     initRecordScreen();
     goTo('record');
   });

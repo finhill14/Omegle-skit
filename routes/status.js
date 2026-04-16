@@ -35,7 +35,7 @@ router.get('/:jobId', (req, res) => {
     emitter.removeListener('progress', onProgress);
     emitter.removeListener('done', onDone);
     emitter.removeListener('error', onError);
-    res.end();
+    if (!res.writableEnded) res.end();
   }
 
   emitter.on('progress', onProgress);

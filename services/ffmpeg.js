@@ -52,15 +52,12 @@ async function mergeVideos(jobId, prerecordedPath, webcamPath, outputPath) {
 
     const inputs = ['-i', prerecordedPath, '-i', webcamPath];
     let filterParts = [];
-    let audioInputCount = 0;
 
     if (!hasAudio0) {
       inputs.push('-f', 'lavfi', '-i', 'anullsrc=channel_layout=stereo:sample_rate=44100');
-      audioInputCount++;
     }
     if (!hasAudio1) {
       inputs.push('-f', 'lavfi', '-i', 'anullsrc=channel_layout=stereo:sample_rate=44100');
-      audioInputCount++;
     }
 
     filterParts.push(
