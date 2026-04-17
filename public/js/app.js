@@ -171,7 +171,7 @@ async function downloadFile(fileId, onProgress) {
   return new Blob(chunks, { type: contentType });
 }
 
-async function uploadToDrive(blob, name, folderId, onProgress) {
+async function uploadToDrive(blob, name, folderId, onProgress, mimeType = 'video/mp4') {
   const token = await getToken();
 
   const initRes = await fetch(`${UPLOAD_API}/files?uploadType=resumable`, {
@@ -179,10 +179,10 @@ async function uploadToDrive(blob, name, folderId, onProgress) {
     headers: {
       Authorization: `Bearer ${token}`,
       'Content-Type': 'application/json',
-      'X-Upload-Content-Type': 'video/mp4',
+      'X-Upload-Content-Type': mimeType,
       'X-Upload-Content-Length': String(blob.size)
     },
-    body: JSON.stringify({ name, parents: [folderId], mimeType: 'video/mp4' })
+    body: JSON.stringify({ name, parents: [folderId], mimeType })
   });
 
   if (!initRes.ok) throw new Error(`Upload init failed: ${initRes.status}`);
@@ -192,7 +192,7 @@ async function uploadToDrive(blob, name, folderId, onProgress) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('PUT', uploadUrl);
-    xhr.setRequestHeader('Content-Type', 'video/mp4');
+    xhr.setRequestHeader('Content-Type', mimeType);
     xhr.upload.onprogress = e => {
       if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total);
     };
@@ -600,12 +600,22 @@ async function processAndUpload() {
 
     const mergedBlob = await mergeVideos(state.currentVideoBlob, state.webcamBlob, p => setProgress(p * 100));
 
-    titleEl.textContent = 'Uploading to Drive...';
-    statusEl.textContent = 'Saving to Omegle Complete folder...';
+    const baseName = sourceVideo.name.replace(/\.[^.]+$/, '');
+    const webcamExt = state.webcamMime.split(';')[0].split('/')[1] || 'webm';
+
+    titleEl.textContent = 'Uploading merged video...';
+    statusEl.textContent = 'Saving combined skit to Omegle Complete...';
     setProgress(0);
 
-    const outputName = `skit_${state.username}_${sourceVideo.name.replace(/\.[^.]+$/, '')}.mp4`;
-    await uploadToDrive(mergedBlob, outputName, state.outputFolderId, p => setProgress(p * 100));
+    const mergedName = `skit_${state.username}_${baseName}.mp4`;
+    await uploadToDrive(mergedBlob, mergedName, state.outputFolderId, p => setProgress(p * 100));
+
+    titleEl.textContent = 'Uploading raw recording...';
+    statusEl.textContent = 'Saving your recording to Omegle Complete...';
+    setProgress(0);
+
+    const rawName = `raw_${state.username}_${baseName}.${webcamExt}`;
+    await uploadToDrive(state.webcamBlob, rawName, state.outputFolderId, p => setProgress(p * 100), state.webcamMime.split(';')[0]);
 
     // Save progress (fire and forget — non-fatal if it fails)
     fetch('/api/progress', {
