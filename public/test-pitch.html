@@ -118,8 +118,9 @@ let segments = [];
 let duration = 0;
 let muteRegions = [];
 let audioCtx = null;
-let mediaSource = null;
+let mediaSource = null; // singleton per file — created once, reused for playback
 let gainNode = null;
+let processor = null;
 let mutedMode = false;
 
 // ─── File loading ─────────────────────────────────────────
@@ -130,13 +131,13 @@ const btnAnalyze = document.getElementById('btn-analyze');
 fileInput.addEventListener('change', () => {
   const file = fileInput.files[0];
   if (!file) return;
+  teardownAudio(); // reset all audio state when new file loaded
   videoEl.src = URL.createObjectURL(file);
   videoEl.load();
   btnAnalyze.disabled = false;
   document.getElementById('results-section').hidden = true;
   document.getElementById('status').textContent = 'Ready to analyse.';
   document.getElementById('progress-fill').style.width = '0';
-  teardownAudioRouting();
 });
 
 // ─── Pitch detection core ─────────────────────────────────
@@ -221,68 +222,131 @@ function framesToSegments(frames, hopDuration, minSegDuration = 0.25) {
   return merged.filter(s => s.end - s.start >= minSegDuration);
 }
 
+// ─── Audio helpers ────────────────────────────────────────
+function ensureCtx() {
+  if (!audioCtx || audioCtx.state === 'closed') {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    mediaSource = null; // new ctx means old source is gone
+  }
+  return audioCtx;
+}
+
+function ensureSource() {
+  ensureCtx();
+  if (!mediaSource) mediaSource = audioCtx.createMediaElementSource(videoEl);
+  return mediaSource;
+}
+
+function teardownAudio() {
+  videoEl.pause();
+  if (processor) { try { processor.disconnect(); } catch {} processor = null; }
+  if (gainNode)   { try { gainNode.disconnect();   } catch {} gainNode   = null; }
+  if (mediaSource){ try { mediaSource.disconnect(); } catch {} mediaSource = null; }
+  if (audioCtx)   { audioCtx.close().catch(() => {}); audioCtx = null; }
+  mutedMode = false;
+}
+
 // ─── Main analysis ────────────────────────────────────────
+// Uses createMediaElementSource so the browser decodes the video natively
+// (avoids decodeAudioData failures on some MP4 codecs).
+// The video plays at 1× speed while audio is captured via ScriptProcessor.
 btnAnalyze.addEventListener('click', async () => {
   btnAnalyze.disabled = true;
   const statusEl = document.getElementById('status');
   const fillEl = document.getElementById('progress-fill');
 
   try {
-    statusEl.textContent = 'Reading file...';
-    fillEl.style.width = '5%';
+    // Stop any current playback and reset processor
+    videoEl.pause();
+    if (processor) { processor.disconnect(); processor = null; }
+    if (gainNode)  { gainNode.disconnect();  gainNode  = null; }
 
-    const file = fileInput.files[0];
-    const arrayBuffer = await file.arrayBuffer();
+    statusEl.textContent = 'Setting up audio capture...';
+    fillEl.style.width = '3%';
 
-    statusEl.textContent = 'Decoding audio...';
-    fillEl.style.width = '15%';
+    const ctx = ensureCtx();
+    await ctx.resume();
+    const source = ensureSource();
+    source.disconnect(); // clear any previous routing
 
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    const decoded = await ctx.decodeAudioData(arrayBuffer);
-    duration = decoded.duration;
+    // Downsample from native SR (~44100 Hz) to ~8000 Hz by taking every DS-th sample
+    const NATIVE_SR = ctx.sampleRate;
+    const DS = Math.max(1, Math.round(NATIVE_SR / 8000));
+    const EFFECTIVE_SR = NATIVE_SR / DS; // ≈ 8000 Hz
 
-    statusEl.textContent = 'Downsampling to 8 kHz...';
-    fillEl.style.width = '25%';
+    let collected = [];
+    processor = ctx.createScriptProcessor(4096, 1, 1);
+    const silentGain = ctx.createGain();
+    silentGain.gain.value = 0; // silent during capture — we're just collecting samples
 
-    const TARGET_RATE = 8000;
-    const targetLen = Math.ceil(decoded.duration * TARGET_RATE);
-    const offCtx = new OfflineAudioContext(1, targetLen, TARGET_RATE);
-    const src = offCtx.createBufferSource();
-    src.buffer = decoded;
-    src.connect(offCtx.destination);
-    src.start();
-    const mono = await offCtx.startRendering();
-    const samples = mono.getChannelData(0);
-    await ctx.close();
+    source.connect(processor);
+    processor.connect(silentGain);
+    silentGain.connect(ctx.destination);
+
+    processor.onaudioprocess = (e) => {
+      const ch = e.inputBuffer.getChannelData(0);
+      for (let i = 0; i < ch.length; i += DS) collected.push(ch[i]);
+      if (duration > 0) {
+        const pct = 3 + (videoEl.currentTime / duration) * 72;
+        fillEl.style.width = Math.min(pct, 75) + '%';
+        statusEl.textContent = `Capturing audio… ${videoEl.currentTime.toFixed(1)}s / ${duration.toFixed(1)}s`;
+      }
+    };
+
+    // Ensure metadata is loaded so we have duration
+    if (!videoEl.duration || isNaN(videoEl.duration)) {
+      await new Promise(res => videoEl.addEventListener('loadedmetadata', res, { once: true }));
+    }
+    duration = videoEl.duration;
+    videoEl.currentTime = 0;
+    videoEl.playbackRate = 1;
+
+    statusEl.textContent = `Capturing audio (plays at normal speed, ${duration.toFixed(0)}s)…`;
+
+    await new Promise((resolve, reject) => {
+      videoEl.addEventListener('ended', resolve, { once: true });
+      videoEl.addEventListener('error', () => reject(new Error('Video playback error')), { once: true });
+      videoEl.play().catch(reject);
+    });
+
+    // Disconnect capture chain — keep source alive for playback
+    source.disconnect();
+    if (processor) { processor.disconnect(); processor = null; }
 
     statusEl.textContent = 'Analysing pitch...';
+    fillEl.style.width = '78%';
+
+    const samples = new Float32Array(collected);
+    collected = null;
+
     const FRAME = 512;
     const HOP   = 128;
     const totalFrames = Math.floor((samples.length - FRAME) / HOP);
     const rawFrames = [];
 
-    // Process in chunks to keep UI responsive
     const CHUNK = 200;
     for (let fi = 0; fi < totalFrames; fi += CHUNK) {
       const end = Math.min(fi + CHUNK, totalFrames);
       for (let f = fi; f < end; f++) {
-        const slice = samples.slice(f * HOP, f * HOP + FRAME);
-        rawFrames.push(analyzeFrame(slice, TARGET_RATE));
+        rawFrames.push(analyzeFrame(samples.slice(f * HOP, f * HOP + FRAME), EFFECTIVE_SR));
       }
-      const pct = 25 + Math.round(((fi + CHUNK) / totalFrames) * 60);
-      fillEl.style.width = Math.min(pct, 85) + '%';
-      statusEl.textContent = `Analysing… ${Math.min(fi + CHUNK, totalFrames)} / ${totalFrames} frames`;
-      await new Promise(r => setTimeout(r, 0)); // yield to UI
+      const pct = 78 + Math.round(((fi + CHUNK) / totalFrames) * 18);
+      fillEl.style.width = Math.min(pct, 96) + '%';
+      statusEl.textContent = `Analysing… frame ${Math.min(fi + CHUNK, totalFrames)} / ${totalFrames}`;
+      await new Promise(r => setTimeout(r, 0));
     }
 
     statusEl.textContent = 'Smoothing results...';
-    fillEl.style.width = '90%';
     const smoothed = medianFilter(rawFrames, 7);
-    segments = framesToSegments(smoothed, HOP / TARGET_RATE);
-    muteRegions = segments.filter(s => s.type === 'female').map(s => ({ start: +s.start.toFixed(3), end: +s.end.toFixed(3) }));
+    const hopDur = HOP / EFFECTIVE_SR;
+    segments = framesToSegments(smoothed, hopDur);
+    muteRegions = segments
+      .filter(s => s.type === 'female')
+      .map(s => ({ start: +s.start.toFixed(3), end: +s.end.toFixed(3) }));
 
     fillEl.style.width = '100%';
-    statusEl.textContent = `Done. Found ${muteRegions.length} female segment(s) totalling ${muteRegions.reduce((s, r) => s + r.end - r.start, 0).toFixed(1)}s.`;
+    const totalFemale = muteRegions.reduce((a, r) => a + r.end - r.start, 0);
+    statusEl.textContent = `Done. ${muteRegions.length} female segment(s), ${totalFemale.toFixed(1)}s total.`;
 
     renderResults();
   } catch (err) {
@@ -301,33 +365,27 @@ function renderResults() {
   const canvas = document.getElementById('timeline-canvas');
   canvas.width = canvas.offsetWidth * devicePixelRatio;
   canvas.height = 44 * devicePixelRatio;
-  const ctx = canvas.getContext('2d');
+  const cx = canvas.getContext('2d');
   const W = canvas.width, H = canvas.height;
-  ctx.clearRect(0, 0, W, H);
 
   const COLOR = { male: '#4a90d9', female: '#f48fb1', silence: '#2a2a2a', unclear: '#333' };
-  segments.forEach(s => {
-    const x = (s.start / duration) * W;
-    const w = Math.max(1, ((s.end - s.start) / duration) * W);
-    ctx.fillStyle = COLOR[s.type] || '#333';
-    ctx.fillRect(x, 0, w, H);
-  });
 
-  // Playhead
-  function drawPlayhead() {
-    ctx.clearRect(0, 0, W, H);
+  function drawTimeline() {
+    cx.clearRect(0, 0, W, H);
     segments.forEach(s => {
       const x = (s.start / duration) * W;
       const w = Math.max(1, ((s.end - s.start) / duration) * W);
-      ctx.fillStyle = COLOR[s.type] || '#333';
-      ctx.fillRect(x, 0, w, H);
+      cx.fillStyle = COLOR[s.type] || '#333';
+      cx.fillRect(x, 0, w, H);
     });
-    const ph = (videoEl.currentTime / duration) * W;
-    ctx.fillStyle = '#fff';
-    ctx.fillRect(ph - 1, 0, 2, H);
-    requestAnimationFrame(drawPlayhead);
+    if (duration > 0) {
+      const ph = (videoEl.currentTime / duration) * W;
+      cx.fillStyle = '#fff';
+      cx.fillRect(ph - 1, 0, 2, H);
+    }
+    requestAnimationFrame(drawTimeline);
   }
-  drawPlayhead();
+  drawTimeline();
 
   // Click to seek
   canvas.addEventListener('click', e => {
@@ -357,53 +415,42 @@ function fmt(s) {
 }
 
 // ─── Playback with muting ─────────────────────────────────
-function setupAudioRouting() {
-  teardownAudioRouting();
-  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  mediaSource = audioCtx.createMediaElementSource(videoEl);
-  gainNode = audioCtx.createGain();
-  mediaSource.connect(gainNode);
-  gainNode.connect(audioCtx.destination);
-}
-
-function teardownAudioRouting() {
-  if (mediaSource) { try { mediaSource.disconnect(); } catch {} mediaSource = null; }
-  if (gainNode) { try { gainNode.disconnect(); } catch {} gainNode = null; }
-  if (audioCtx) { audioCtx.close().catch(() => {}); audioCtx = null; }
-  mutedMode = false;
-}
+// Reuses the same audioCtx + mediaSource created during analysis.
 
 function inMuteRegion(t) {
   return muteRegions.some(r => t >= r.start && t <= r.end);
 }
 
 videoEl.addEventListener('timeupdate', () => {
-  if (!mutedMode || !gainNode) return;
+  if (!mutedMode || !gainNode || !audioCtx) return;
   const target = inMuteRegion(videoEl.currentTime) ? 0 : 1;
   gainNode.gain.setTargetAtTime(target, audioCtx.currentTime, 0.03);
 });
 
-document.getElementById('btn-normal').addEventListener('click', async () => {
-  setupAudioRouting();
-  mutedMode = false;
+function startPlayback(muted) {
+  if (!audioCtx || audioCtx.state === 'closed') return; // need to analyse first
+  if (gainNode) { gainNode.disconnect(); gainNode = null; }
+  const source = ensureSource();
+  source.disconnect(); // clear any stale connections
+  gainNode = audioCtx.createGain();
   gainNode.gain.value = 1;
-  await audioCtx.resume();
+  source.connect(gainNode);
+  gainNode.connect(audioCtx.destination);
+  mutedMode = muted;
+  audioCtx.resume().catch(() => {});
   videoEl.currentTime = 0;
-  videoEl.play();
-});
+  videoEl.playbackRate = 1;
+  videoEl.play().catch(() => {});
+}
 
-document.getElementById('btn-muted').addEventListener('click', async () => {
-  setupAudioRouting();
-  mutedMode = true;
-  await audioCtx.resume();
-  videoEl.currentTime = 0;
-  videoEl.play();
-});
+document.getElementById('btn-normal').addEventListener('click', () => startPlayback(false));
+document.getElementById('btn-muted').addEventListener('click', () => startPlayback(true));
 
 document.getElementById('btn-stop').addEventListener('click', () => {
   videoEl.pause();
   videoEl.currentTime = 0;
-  teardownAudioRouting();
+  if (gainNode) { gainNode.disconnect(); gainNode = null; }
+  mutedMode = false;
 });
 
 // ─── Export ───────────────────────────────────────────────
