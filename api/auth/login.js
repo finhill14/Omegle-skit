@@ -17,13 +17,14 @@ module.exports = async (req, res) => {
     res.end(JSON.stringify({ error: 'Username and password required' })); return;
   }
 
+  const normalised = username.toLowerCase();
   const accounts = parseAccounts();
-  if (!accounts[username] || accounts[username] !== password) {
+  if (!accounts[normalised] || accounts[normalised] !== password) {
     res.writeHead(401, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'Invalid username or password' })); return;
   }
 
-  const token = signToken(username);
+  const token = signToken(normalised);
   res.writeHead(200, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify({ token, username }));
+  res.end(JSON.stringify({ token, username: normalised }));
 };
