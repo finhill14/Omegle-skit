@@ -72,7 +72,9 @@ async function findFolder(name) {
   const data = await driveGet('/files', {
     q: `name='${name}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
     fields: 'files(id,name)',
-    spaces: 'drive'
+    spaces: 'drive',
+    supportsAllDrives: 'true',
+    includeItemsFromAllDrives: 'true'
   });
   return data.files[0] || null;
 }
@@ -102,17 +104,22 @@ async function listVideos(folderId) {
     q: `'${folderId}' in parents and mimeType contains 'video/' and trashed=false`,
     fields: 'files(id,name,mimeType)',
     orderBy: 'name',
-    pageSize: '1000'
+    pageSize: '1000',
+    supportsAllDrives: 'true',
+    includeItemsFromAllDrives: 'true'
   });
   return data.files || [];
 }
 
 async function downloadFile(fileId, onProgress) {
   const token = await getToken();
-  const res = await fetch(
-    `${DRIVE_API}/files/${fileId}?alt=media&access_token=${encodeURIComponent(token)}`
-  );
-  if (!res.ok) throw new Error(`Download failed: ${res.status}`);
+  const url = `${DRIVE_API}/files/${fileId}?alt=media&acknowledgeAbuse=true&supportsAllDrives=true&access_token=${encodeURIComponent(token)}`;
+  const res = await fetch(url);
+  if (!res.ok) {
+    let body = '';
+    try { body = await res.text(); } catch {}
+    throw new Error(`Download failed: ${res.status} — ${body.slice(0, 200)}`);
+  }
 
   const contentType = res.headers.get('content-type') || 'video/mp4';
   const contentLength = res.headers.get('content-length');
