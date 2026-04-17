@@ -12,16 +12,40 @@ body {
 }
 
 header {
-  text-align: center;
-  padding: 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1rem;
   background: #111;
   border-bottom: 1px solid #222;
 }
 
 header h1 {
-  font-size: 1.4rem;
+  font-size: 1.2rem;
   font-weight: 600;
   color: #4fc3f7;
+}
+
+.header-user {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 0.85rem;
+  color: #888;
+}
+
+.btn-link {
+  background: none;
+  border: none;
+  color: #555;
+  font-size: 0.8rem;
+  cursor: pointer;
+  padding: 0.25rem;
+  text-decoration: underline;
+}
+
+.btn-link:hover {
+  color: #aaa;
 }
 
 main {
@@ -84,6 +108,11 @@ p strong {
   transform: scale(0.97);
 }
 
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .btn-google {
   background: #4285f4;
   color: #fff;
@@ -132,6 +161,37 @@ p strong {
   background: #66bb6a;
 }
 
+/* ── Login form ───────────────────────────────── */
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-width: 280px;
+  margin: 0 auto;
+}
+
+.login-form input {
+  padding: 0.75rem 1rem;
+  background: #1a1a1a;
+  border: 1px solid #333;
+  border-radius: 8px;
+  color: #fff;
+  font-size: 1rem;
+  text-align: left;
+}
+
+.login-form input:focus {
+  outline: none;
+  border-color: #4fc3f7;
+}
+
+.error-msg {
+  color: #ef5350 !important;
+  font-size: 0.85rem !important;
+  margin: 0 !important;
+}
+
+/* ── Spinner / progress ───────────────────────── */
 .spinner {
   width: 40px;
   height: 40px;
@@ -169,9 +229,10 @@ p strong {
   transition: width 0.3s;
 }
 
+/* ── Video counter ────────────────────────────── */
 .video-counter {
   text-align: center;
-  margin-bottom: 0.75rem;
+  margin-bottom: 0.5rem;
   font-size: 0.9rem;
   color: #888;
 }
@@ -186,25 +247,37 @@ p strong {
   white-space: nowrap;
 }
 
+/* ── Video stack (record screen) ─────────────── */
 .video-stack {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  margin-bottom: 1rem;
+  gap: 2px;
+  margin-bottom: 0.75rem;
+  aspect-ratio: 9 / 16;
+  width: 100%;
+}
+
+/* Top (their video) — 40% of height, cropped to fill */
+.video-stack .video-top {
+  flex: 0 0 40%;
+}
+
+/* Bottom (webcam) — 60% of height, cropped to fill */
+.video-stack .video-bottom {
+  flex: 0 0 60%;
 }
 
 .video-half {
   position: relative;
   background: #111;
-  border-radius: 8px;
+  border-radius: 4px;
   overflow: hidden;
-  aspect-ratio: 9/8;
 }
 
 .video-half video {
   width: 100%;
   height: 100%;
-  object-fit: contain;
+  object-fit: cover;
   display: block;
 }
 
@@ -223,12 +296,13 @@ p strong {
   transform: scaleX(-1);
 }
 
+/* ── Controls ─────────────────────────────────── */
 .controls {
   display: flex;
   justify-content: center;
   gap: 1rem;
   flex-wrap: wrap;
-  margin-top: 1rem;
+  margin-top: 0.75rem;
 }
 
 .timer {
@@ -243,21 +317,25 @@ p strong {
   text-align: center;
   color: #555;
   font-size: 0.8rem;
-  margin-top: 0.75rem;
+  margin-top: 0.5rem;
 }
 
+/* ── Preview container ────────────────────────── */
 .preview-container {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  max-width: 400px;
+  max-width: 320px;
   margin: 0 auto 1rem;
-  aspect-ratio: 9/16;
+  aspect-ratio: 9 / 16;
 }
 
-.preview-container .video-half {
-  flex: 1;
-  aspect-ratio: auto;
+.preview-container .video-top {
+  flex: 0 0 40%;
+}
+
+.preview-container .video-bottom {
+  flex: 0 0 60%;
 }
 
 #screen-done .center-card,

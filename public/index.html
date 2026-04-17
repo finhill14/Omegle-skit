@@ -9,16 +9,34 @@
 <body>
   <header>
     <h1>Omegle Skit Studio</h1>
+    <div id="user-info" class="header-user" hidden>
+      <span id="header-username"></span>
+      <button id="btn-logout" class="btn-link">Sign out</button>
+    </div>
   </header>
 
   <main>
-    <!-- Setup (only shown if env var not configured) -->
+    <!-- User Login -->
     <section id="screen-login" class="screen active">
+      <div class="center-card">
+        <h2>Sign In</h2>
+        <p>Enter your credentials to start recording</p>
+        <div class="login-form">
+          <input type="text" id="login-username" placeholder="Username" autocomplete="username" />
+          <input type="password" id="login-password" placeholder="Password" autocomplete="current-password" />
+          <button id="btn-login" class="btn btn-approve">Sign In</button>
+          <p id="login-error" class="error-msg" hidden></p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Owner Setup (only shown if env var not configured) -->
+    <section id="screen-setup" class="screen">
       <div class="center-card">
         <h2>First-Time Setup</h2>
         <p>The app hasn't been configured yet. Sign in with the Google account that owns the Drive folders to complete setup.</p>
         <a href="/api/auth/google" class="btn btn-google">Sign in to Set Up</a>
-        <p style="margin-top:1.5rem;font-size:.8rem;color:#555">Once setup is complete, your models won't need to sign in.</p>
+        <p style="margin-top:1.5rem;font-size:.8rem;color:#555">Once setup is complete, your models won't need to sign in with Google.</p>
       </div>
     </section>
 
@@ -50,11 +68,11 @@
         <span id="current-name" class="video-name"></span>
       </div>
       <div class="video-stack">
-        <div class="video-half">
+        <div class="video-half video-top">
           <video id="prerecorded-video" playsinline></video>
           <span class="video-label">Their Video</span>
         </div>
-        <div class="video-half">
+        <div class="video-half video-bottom">
           <video id="webcam-preview" playsinline autoplay muted></video>
           <span class="video-label">You</span>
         </div>
@@ -71,10 +89,10 @@
     <section id="screen-preview" class="screen">
       <h2>Preview Your Skit</h2>
       <div class="preview-container">
-        <div class="video-half">
+        <div class="video-half video-top">
           <video id="preview-top" playsinline></video>
         </div>
-        <div class="video-half">
+        <div class="video-half video-bottom">
           <video id="preview-bottom" playsinline></video>
         </div>
       </div>
