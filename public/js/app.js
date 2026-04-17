@@ -692,16 +692,27 @@ function renderVideoList() {
     const done = state.completedSet.has(video.id);
     const card = document.createElement('button');
     card.className = `video-card${done ? ' completed' : ''}`;
-    card.innerHTML = `<span class="video-card-name">${video.name}</span>` +
-      (done
-        ? '<span class="video-card-status" style="color:#43a047">Done</span>'
-        : '<span class="video-card-status" style="color:#4fc3f7">Record →</span>');
+
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'video-card-name';
+    nameSpan.textContent = video.name;
+
+    const statusSpan = document.createElement('span');
+    statusSpan.className = 'video-card-status';
+    statusSpan.style.color = done ? '#43a047' : '#4fc3f7';
+    statusSpan.textContent = done ? 'Done' : 'Record \u2192';
+
+    card.appendChild(nameSpan);
+    card.appendChild(statusSpan);
     if (!done) card.addEventListener('click', () => selectVideo(index));
     list.appendChild(card);
   });
 }
 
+let loadingVideo = false;
+
 function selectVideo(index) {
+  if (loadingVideo) return;
   state.currentIndex = index;
   loadCurrentVideo();
 }
@@ -710,6 +721,7 @@ async function loadCurrentVideo() {
   const video = state.allVideos[state.currentIndex];
   if (!video) { goTo('screen-select'); return; }
 
+  loadingVideo = true;
   goTo('screen-loading');
   $('loading-status').textContent = `Downloading: ${video.name}`;
   $('loading-progress').hidden = false;
@@ -734,6 +746,7 @@ async function loadCurrentVideo() {
     $('loading-bar').style.width = '0%';
   } catch (err) {
     $('loading-progress').hidden = true;
+    loadingVideo = false;
     alert('Failed to download video: ' + err.message);
     goTo('screen-select');
     return;
@@ -742,11 +755,13 @@ async function loadCurrentVideo() {
   try {
     await initCamera();
   } catch (err) {
+    loadingVideo = false;
     alert('Camera access denied. Please allow camera and microphone access and reload the page.');
     goTo('screen-select');
     return;
   }
 
+  loadingVideo = false;
   goTo('screen-record');
 }
 
@@ -760,8 +775,13 @@ $('btn-back').addEventListener('click', () => {
 });
 
 $('btn-next').addEventListener('click', () => {
-  renderVideoList();
-  goTo('screen-select');
+  const remaining = state.allVideos.filter(v => !state.completedSet.has(v.id));
+  if (remaining.length === 0) {
+    goTo('screen-complete');
+  } else {
+    renderVideoList();
+    goTo('screen-select');
+  }
 });
 
 $('btn-refresh').addEventListener('click', () => loadVideoList());
@@ -804,6 +824,10 @@ $('btn-login').addEventListener('click', async () => {
     btn.disabled = false;
     btn.textContent = 'Sign In';
   }
+});
+
+$('login-username').addEventListener('keydown', e => {
+  if (e.key === 'Enter') $('login-password').focus();
 });
 
 $('login-password').addEventListener('keydown', e => {
