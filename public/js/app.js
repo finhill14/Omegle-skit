@@ -142,9 +142,9 @@ async function listVideos(folderId) {
 
 async function downloadFile(fileId, onProgress) {
   const token = await getToken();
-  const res = await fetch(`${DRIVE_API}/files/${fileId}?alt=media`, {
-    headers: { Authorization: `Bearer ${token}` }
-  });
+  const res = await fetch(
+    `${DRIVE_API}/files/${fileId}?alt=media&access_token=${encodeURIComponent(token)}`
+  );
   if (!res.ok) throw new Error(`Download failed: ${res.status}`);
 
   const contentType = res.headers.get('content-type') || 'video/mp4';
@@ -186,6 +186,7 @@ async function uploadToDrive(blob, name, folderId, onProgress) {
 
   if (!initRes.ok) throw new Error(`Upload init failed: ${initRes.status}`);
   const uploadUrl = initRes.headers.get('Location');
+  if (!uploadUrl) throw new Error('Upload failed: no upload URL received from Google Drive');
 
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
@@ -361,7 +362,7 @@ function startRecording() {
 
   mediaRecorder.start(1000);
   prerecordedVideo.currentTime = 0;
-  prerecordedVideo.play();
+  prerecordedVideo.play().catch(() => {});
 
   isRecording = true;
   btnRecord.textContent = 'Stop Recording';
@@ -423,8 +424,8 @@ btnPlayPreview.addEventListener('click', () => {
   if (previewTop.paused) {
     previewTop.currentTime = 0;
     previewBottom.currentTime = 0;
-    previewTop.play();
-    previewBottom.play();
+    previewTop.play().catch(() => {});
+    previewBottom.play().catch(() => {});
     btnPlayPreview.textContent = 'Pause';
 
     clearSync();
