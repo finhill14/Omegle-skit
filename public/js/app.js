@@ -438,6 +438,32 @@ const previewBottom = $('preview-bottom');
 const btnPlayPreview = $('btn-play-preview');
 let syncInterval = null;
 
+// Web Audio for webcam track (previewBottom stays muted so iOS lets it play visually)
+let audioCtx = null;
+let webcamAudioBuffer = null;
+let webcamAudioSource = null;
+
+function getAudioCtx() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  return audioCtx;
+}
+
+function stopWebcamAudio() {
+  if (webcamAudioSource) {
+    try { webcamAudioSource.stop(); } catch {}
+    webcamAudioSource = null;
+  }
+}
+
+function playWebcamAudio(offset = 0) {
+  stopWebcamAudio();
+  if (!webcamAudioBuffer) return;
+  webcamAudioSource = getAudioCtx().createBufferSource();
+  webcamAudioSource.buffer = webcamAudioBuffer;
+  webcamAudioSource.connect(getAudioCtx().destination);
+  webcamAudioSource.start(0, offset);
+}
+
 function initPreview() {
   btnPlayPreview.disabled = true;
   btnPlayPreview.textContent = 'Loading...';
@@ -447,17 +473,13 @@ function initPreview() {
 
   let ready = 0;
   const onReady = () => {
-    ready++;
-    if (ready >= 2) {
+    if (++ready >= 2) {
       btnPlayPreview.disabled = false;
       btnPlayPreview.textContent = 'Play Preview';
     }
   };
-
   previewTop.addEventListener('loadedmetadata', onReady, { once: true });
   previewBottom.addEventListener('loadedmetadata', onReady, { once: true });
-
-  // Fallback: enable after 4s regardless
   setTimeout(() => {
     if (btnPlayPreview.disabled) {
       btnPlayPreview.disabled = false;
@@ -468,21 +490,56 @@ function initPreview() {
   previewTop.load();
   previewBottom.load();
   clearSync();
+
+  // Pre-decode webcam audio into AudioContext buffer in background
+  webcamAudioBuffer = null;
+  if (state.webcamBlob) {
+    state.webcamBlob.arrayBuffer()
+      .then(ab => getAudioCtx().decodeAudioData(ab))
+      .then(buf => { webcamAudioBuffer = buf; })
+      .catch(() => {});
+  }
 }
 
 function clearSync() {
   if (syncInterval) { clearInterval(syncInterval); syncInterval = null; }
 }
 
+function stopPreview() {
+  previewTop.pause();
+  previewBottom.pause();
+  stopWebcamAudio();
+  clearSync();
+  btnPlayPreview.textContent = 'Play Preview';
+}
+
 btnPlayPreview.addEventListener('click', () => {
   if (previewTop.paused) {
     previewTop.currentTime = 0;
     previewBottom.currentTime = 0;
-    // Both play() calls must be synchronous to keep iOS user-gesture context
-    previewTop.play().catch(() => {});
-    previewBottom.play().catch(() => {});
-    btnPlayPreview.textContent = 'Pause';
 
+    // Resume AudioContext synchronously while inside the user-gesture call stack
+    getAudioCtx().resume().catch(() => {});
+
+    // Both video play() calls synchronous — preserves iOS user-gesture context
+    previewTop.play().catch(() => {});
+    previewBottom.play().catch(() => {}); // muted; video sync only
+
+    // Webcam audio via AudioContext — if buffer ready, start immediately;
+    // if still decoding, start once done (with time offset to stay in sync)
+    if (webcamAudioBuffer) {
+      playWebcamAudio(0);
+    } else if (state.webcamBlob) {
+      state.webcamBlob.arrayBuffer()
+        .then(ab => getAudioCtx().decodeAudioData(ab))
+        .then(buf => {
+          webcamAudioBuffer = buf;
+          playWebcamAudio(previewTop.currentTime);
+        })
+        .catch(() => {});
+    }
+
+    btnPlayPreview.textContent = 'Pause';
     clearSync();
     syncInterval = setInterval(() => {
       if (previewTop.paused || previewTop.ended) { clearSync(); return; }
@@ -490,23 +547,16 @@ btnPlayPreview.addEventListener('click', () => {
       if (drift > 0.1) previewBottom.currentTime = previewTop.currentTime;
     }, 500);
   } else {
-    previewTop.pause();
-    previewBottom.pause();
-    clearSync();
-    btnPlayPreview.textContent = 'Play Preview';
+    stopPreview();
   }
 });
 
 previewTop.addEventListener('ended', () => {
-  previewBottom.pause();
-  clearSync();
-  btnPlayPreview.textContent = 'Play Preview';
+  stopPreview();
 });
 
 $('btn-rerecord').addEventListener('click', async () => {
-  previewTop.pause();
-  previewBottom.pause();
-  clearSync();
+  stopPreview();
   recTimer.textContent = '00:00';
   recTimer.hidden = true;
   try {
@@ -518,9 +568,7 @@ $('btn-rerecord').addEventListener('click', async () => {
 });
 
 $('btn-approve').addEventListener('click', () => {
-  previewTop.pause();
-  previewBottom.pause();
-  clearSync();
+  stopPreview();
   processAndUpload();
 });
 
