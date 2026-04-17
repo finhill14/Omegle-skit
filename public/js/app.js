@@ -321,7 +321,7 @@ function getMimeType() {
 async function initCamera() {
   if (webcamStream) return;
   webcamStream = await navigator.mediaDevices.getUserMedia({
-    video: { width: { ideal: 1080 }, height: { ideal: 1920 }, facingMode: 'user' },
+    video: { facingMode: 'user', aspectRatio: { ideal: 9 / 16 } },
     audio: true
   });
   webcamPreview.srcObject = webcamStream;
