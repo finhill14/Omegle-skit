@@ -229,6 +229,57 @@ p strong {
   transition: width 0.3s;
 }
 
+/* ── Video selection list ─────────────────────── */
+.video-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.video-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  background: #1a1a1a;
+  border: 1px solid #333;
+  border-radius: 8px;
+  color: #fff;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  font-family: inherit;
+  font-size: inherit;
+}
+
+.video-card:hover {
+  background: #222;
+  border-color: #4fc3f7;
+}
+
+.video-card.completed {
+  opacity: 0.4;
+}
+
+.video-card.completed:hover {
+  background: #1a1a1a;
+  border-color: #333;
+  cursor: default;
+}
+
+.video-card-name {
+  font-size: 0.9rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-right: 0.5rem;
+}
+
+.video-card-status {
+  font-size: 0.8rem;
+  flex-shrink: 0;
+}
+
 /* ── Video counter ────────────────────────────── */
 .video-counter {
   text-align: center;

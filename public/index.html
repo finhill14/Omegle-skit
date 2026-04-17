@@ -61,10 +61,16 @@
       </div>
     </section>
 
+    <!-- Video Selection -->
+    <section id="screen-select" class="screen">
+      <h2>Choose a Video</h2>
+      <p><span id="select-remaining">0</span> of <span id="select-total">0</span> remaining</p>
+      <div id="video-list" class="video-list"></div>
+    </section>
+
     <!-- Record -->
     <section id="screen-record" class="screen">
       <div class="video-counter">
-        Video <span id="current-num">1</span> of <span id="total-num">0</span>
         <span id="current-name" class="video-name"></span>
       </div>
       <div class="video-stack">
@@ -82,7 +88,7 @@
       </div>
       <div class="controls">
         <button id="btn-record" class="btn btn-record">Start Recording</button>
-        <button id="btn-skip" class="btn btn-secondary">Skip</button>
+        <button id="btn-back" class="btn btn-secondary">Back</button>
         <span id="rec-timer" class="timer" hidden>00:00</span>
       </div>
       <p class="tip">Wear headphones for best audio quality</p>
