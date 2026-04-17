@@ -1,81 +1,86 @@
 # Omegle Skit Studio
 
-A web app for creating split-screen omegle-style skits. Source videos (the guy's half) are loaded from Google Drive, your models record their webcam response, and the finished 9:16 split-screen video is saved back to Google Drive.
+Split-screen omegle-style skit creator. Source videos load from YOUR Google Drive, your OFM models record responses via webcam (no sign-in required), finished 9:16 skits save back to YOUR Drive.
 
-## How It Works
+## Architecture
 
-1. **Sign in** with Google to connect your Drive
-2. **Source videos** are loaded from the **"Omegle Source"** folder in your Drive
-3. **Record** — the source video plays at the top while you record your webcam response at the bottom
-4. **Preview** — watch both videos synced in a 9:16 split-screen layout
-5. **Approve** — the app merges them in-browser (via FFmpeg WASM) into a single 1080x1920 MP4
-6. **Auto-uploads** the finished skit to the **"Omegle Complete"** folder in your Drive
-7. **Cycles** to the next video automatically — already-completed videos are skipped
+- **One-time OAuth setup** by the owner — produces a refresh token stored as a Vercel env var
+- **Models access the app without signing in** — the server uses your refresh token to get fresh access tokens on demand
+- **Client-side video merging** with FFmpeg WASM (no server compute)
+- **All Drive operations** happen directly from the browser using short-lived access tokens
 
 ## Setup
 
 ### 1. Google Cloud Console
 
-1. Create a project (or use an existing one) at [console.cloud.google.com](https://console.cloud.google.com)
+1. Create (or use existing) project at [console.cloud.google.com](https://console.cloud.google.com)
 2. Enable the **Google Drive API**
 3. Go to **Credentials → Create Credentials → OAuth 2.0 Client ID**
 4. Application type: **Web application**
-5. Add authorized redirect URIs:
-   - `https://your-app.vercel.app/api/auth/callback` (production)
-   - `http://localhost:3000/api/auth/callback` (local dev)
+5. Add authorized redirect URI: `https://your-app.vercel.app/api/auth/callback`
 6. Copy the **Client ID** and **Client Secret**
 
 ### 2. Deploy to Vercel
 
-1. Push this repo to GitHub
-2. Import the repo in [vercel.com](https://vercel.com)
-3. Add environment variables:
-   - `GOOGLE_CLIENT_ID` — your OAuth client ID
-   - `GOOGLE_CLIENT_SECRET` — your OAuth client secret
-4. Deploy
+1. Push this repo to GitHub, import in [vercel.com](https://vercel.com)
+2. Add environment variables:
+   - `GOOGLE_CLIENT_ID`
+   - `GOOGLE_CLIENT_SECRET`
+3. Deploy
 
-### 3. Prepare Your Drive
+### 3. Get Your Refresh Token (one-time, 30 seconds)
 
-1. Open Google Drive
-2. Create a folder called **"Omegle Source"**
-3. Upload your pre-recorded omegle videos (the guy's half) into that folder
-4. The app will auto-create the **"Omegle Complete"** folder for finished skits
+1. Open `https://your-app.vercel.app` — you'll see "First-Time Setup"
+2. Click **Sign in to Set Up** and sign in with YOUR Google account (the one with the Drive folders)
+3. You'll see a page with your refresh token — copy it
+4. Back in Vercel: **Settings → Environment Variables**
+5. Add: `GOOGLE_REFRESH_TOKEN` = (paste the token)
+6. Go to **Deployments** → click "..." on latest → **Redeploy**
 
-### Local Development
+Done. Anyone who visits the app now uses YOUR Drive without needing to sign in.
 
-```bash
-npx vercel env pull .env.local   # pull env vars from Vercel
-npx vercel dev                    # runs on http://localhost:3000
+### 4. Prepare Your Drive
+
+1. In your Google Drive, create a folder called **"Omegle Source"**
+2. Upload your pre-recorded omegle videos (the guy's half) into it
+3. The app auto-creates an **"Omegle Complete"** folder for finished skits
+
+## Model Workflow
+
+Your models just visit the URL. No sign-in, no setup. They:
+
+1. See the first source video at the top of the screen
+2. Hit **Record** — the video plays, they respond into the webcam
+3. Preview the 9:16 split-screen result
+4. Approve — it merges in-browser and saves to your "Omegle Complete" folder
+5. Auto-advances to the next video, skipping any already-completed ones
+
+## Project Structure
+
 ```
-
-## Architecture
-
-```
-├── api/
-│   └── auth/
-│       ├── google.js      # Redirects to Google OAuth
-│       ├── callback.js    # Exchanges code for tokens
-│       └── refresh.js     # Refreshes expired access tokens
+├── api/auth/
+│   ├── google.js      # Start OAuth flow (owner setup only)
+│   ├── callback.js    # Display refresh token after setup
+│   └── refresh.js     # Returns fresh access tokens from env var refresh token
 ├── public/
-│   ├── index.html         # Single-page app
-│   ├── css/style.css      # Styling
-│   └── js/app.js          # All frontend logic
-├── vercel.json            # Vercel config
+│   ├── index.html
+│   ├── css/style.css
+│   └── js/app.js      # All frontend logic + FFmpeg WASM
+├── vercel.json
 └── package.json
 ```
 
-**No server-side processing** — video merging happens entirely in the browser using FFmpeg compiled to WebAssembly. The Vercel functions only handle OAuth token exchange.
+## Technical Notes
 
-## Technical Details
+- **Video format**: 1080×1920 H.264/AAC MP4 — scales each input to fit 1080×960 with black bar letterboxing
+- **Merge**: Happens in the browser via FFmpeg WASM (~30MB first load, cached after)
+- **Audio**: Mixes both tracks; falls back to webcam-only audio if source has none. Recommend headphones during recording to prevent echo.
+- **Tokens**: Access tokens are never stored client-side long-term; they expire in 1 hour and are re-fetched as needed from the server
 
-- **Video merging**: FFmpeg WASM scales each input to fit a 1080×960 box (black bars for aspect ratio mismatches), then stacks vertically into 1080×1920
-- **Audio**: Both audio tracks are mixed. If the source video has no audio, only the webcam audio is used. Recommend headphones during recording to prevent echo
-- **Recording**: MediaRecorder API, auto-stops when the source video ends
-- **Storage**: Google Drive API v3 — resumable uploads for large files
-- **First load**: FFmpeg WASM core is ~30MB (downloaded from CDN, cached by browser after first load)
+## Environment Variables
 
-## Requirements
-
-- Modern browser with WebAssembly support (Chrome, Firefox, Safari 15+)
-- Webcam and microphone access
-- Google account with Google Drive
+| Variable | Where to get it |
+|---|---|
+| `GOOGLE_CLIENT_ID` | Google Cloud Console → OAuth client |
+| `GOOGLE_CLIENT_SECRET` | Google Cloud Console → OAuth client |
+| `GOOGLE_REFRESH_TOKEN` | Generated once via the app's setup flow |

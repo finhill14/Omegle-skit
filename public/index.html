@@ -9,16 +9,16 @@
 <body>
   <header>
     <h1>Omegle Skit Studio</h1>
-    <button id="btn-logout" class="btn-link" hidden>Sign Out</button>
   </header>
 
   <main>
-    <!-- Login -->
+    <!-- Setup (only shown if env var not configured) -->
     <section id="screen-login" class="screen active">
       <div class="center-card">
-        <h2>Sign in to get started</h2>
-        <p>Connect your Google Drive to load source videos and save completed skits</p>
-        <a href="/api/auth/google" class="btn btn-google">Sign in with Google</a>
+        <h2>First-Time Setup</h2>
+        <p>The app hasn't been configured yet. Sign in with the Google account that owns the Drive folders to complete setup.</p>
+        <a href="/api/auth/google" class="btn btn-google">Sign in to Set Up</a>
+        <p style="margin-top:1.5rem;font-size:.8rem;color:#555">Once setup is complete, your models won't need to sign in.</p>
       </div>
     </section>
 
