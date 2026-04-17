@@ -12,10 +12,7 @@ body {
 }
 
 header {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  position: relative;
+  text-align: center;
   padding: 1rem;
   background: #111;
   border-bottom: 1px solid #222;
@@ -25,20 +22,6 @@ header h1 {
   font-size: 1.4rem;
   font-weight: 600;
   color: #4fc3f7;
-}
-
-.btn-link {
-  position: absolute;
-  right: 1rem;
-  background: none;
-  border: none;
-  color: #888;
-  cursor: pointer;
-  font-size: 0.85rem;
-}
-
-.btn-link:hover {
-  color: #ccc;
 }
 
 main {

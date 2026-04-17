@@ -28,31 +28,6 @@ function goTo(screen) {
 }
 
 // ─── Auth ────────────────────────────────────────────────
-function extractTokenFromHash() {
-  if (!window.location.hash) return false;
-  const params = new URLSearchParams(window.location.hash.slice(1));
-  const token = params.get('access_token');
-  const expiresIn = parseInt(params.get('expires_in')) || 3600;
-  if (!token) return false;
-  state.accessToken = token;
-  state.tokenExpiry = Date.now() + (expiresIn - 60) * 1000;
-  sessionStorage.setItem('access_token', token);
-  sessionStorage.setItem('token_expiry', String(state.tokenExpiry));
-  history.replaceState(null, '', '/');
-  return true;
-}
-
-function loadTokenFromSession() {
-  const token = sessionStorage.getItem('access_token');
-  const expiry = parseInt(sessionStorage.getItem('token_expiry'));
-  if (token && expiry > Date.now()) {
-    state.accessToken = token;
-    state.tokenExpiry = expiry;
-    return true;
-  }
-  return false;
-}
-
 async function refreshAccessToken() {
   try {
     const res = await fetch('/api/auth/refresh');
@@ -60,8 +35,6 @@ async function refreshAccessToken() {
     const data = await res.json();
     state.accessToken = data.access_token;
     state.tokenExpiry = Date.now() + ((data.expires_in || 3600) - 60) * 1000;
-    sessionStorage.setItem('access_token', data.access_token);
-    sessionStorage.setItem('token_expiry', String(state.tokenExpiry));
     return true;
   } catch {
     return false;
@@ -72,16 +45,10 @@ async function getToken() {
   if (state.accessToken && state.tokenExpiry > Date.now()) return state.accessToken;
   const ok = await refreshAccessToken();
   if (!ok) {
-    sessionStorage.clear();
     goTo('screen-login');
-    throw new Error('Session expired. Please sign in again.');
+    throw new Error('Not configured.');
   }
   return state.accessToken;
-}
-
-function logout() {
-  sessionStorage.clear();
-  window.location.href = '/api/auth/logout';
 }
 
 // ─── Drive API ───────────────────────────────────────────
@@ -557,9 +524,8 @@ async function loadVideoList() {
       await loadCurrentVideo();
     }
   } catch (err) {
-    if (err.message.includes('Session expired') || err.message.includes('Not authenticated')) {
+    if (err.message.includes('Not configured')) {
       goTo('screen-login');
-      $('btn-logout').hidden = true;
     } else {
       alert('Failed to load videos: ' + err.message);
       goTo('screen-empty');
@@ -641,7 +607,6 @@ $('btn-next').addEventListener('click', () => {
 
 $('btn-refresh').addEventListener('click', () => loadVideoList());
 $('btn-check-new').addEventListener('click', () => loadVideoList());
-$('btn-logout').addEventListener('click', logout);
 
 // ─── Init ────────────────────────────────────────────────
 async function init() {
@@ -650,17 +615,12 @@ async function init() {
     return;
   }
 
-  const hasToken = extractTokenFromHash() || loadTokenFromSession();
-
-  if (!hasToken) {
-    const refreshed = await refreshAccessToken();
-    if (!refreshed) {
-      goTo('screen-login');
-      return;
-    }
+  const refreshed = await refreshAccessToken();
+  if (!refreshed) {
+    goTo('screen-login');
+    return;
   }
 
-  $('btn-logout').hidden = false;
   await loadVideoList();
 }
 
