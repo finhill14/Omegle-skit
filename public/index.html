@@ -9,33 +9,46 @@
 <body>
   <header>
     <h1>Omegle Skit Studio</h1>
+    <button id="btn-logout" class="btn-link" hidden>Sign Out</button>
   </header>
 
   <main>
-    <!-- SCREEN 1: Upload pre-recorded video -->
-    <section id="screen-upload" class="screen active">
-      <h2>Upload Pre-Recorded Video</h2>
-      <p>Upload the guy's half of the omegle conversation</p>
-      <div id="dropzone" class="dropzone">
-        <div class="dropzone-content">
-          <span class="dropzone-icon">&#128249;</span>
-          <p>Drag & drop video here</p>
-          <p class="or">or</p>
-          <label class="file-btn">
-            Browse Files
-            <input type="file" id="file-input" accept="video/*" hidden>
-          </label>
-        </div>
-        <div id="upload-progress" class="progress-container" hidden>
-          <div class="progress-bar"><div id="upload-bar" class="progress-fill"></div></div>
-          <span id="upload-percent">0%</span>
+    <!-- Login -->
+    <section id="screen-login" class="screen active">
+      <div class="center-card">
+        <h2>Sign in to get started</h2>
+        <p>Connect your Google Drive to load source videos and save completed skits</p>
+        <a href="/api/auth/google" class="btn btn-google">Sign in with Google</a>
+      </div>
+    </section>
+
+    <!-- Loading -->
+    <section id="screen-loading" class="screen">
+      <div class="center-card">
+        <div class="spinner"></div>
+        <p id="loading-status">Connecting to Google Drive...</p>
+        <div class="progress-container" id="loading-progress" hidden>
+          <div class="progress-bar"><div id="loading-bar" class="progress-fill"></div></div>
+          <span id="loading-percent"></span>
         </div>
       </div>
     </section>
 
-    <!-- SCREEN 2: Record response -->
+    <!-- Empty (no source videos) -->
+    <section id="screen-empty" class="screen">
+      <div class="center-card">
+        <h2>No Source Videos Found</h2>
+        <p>Add pre-recorded omegle videos to the <strong>"Omegle Source"</strong> folder in your Google Drive, then come back.</p>
+        <button id="btn-refresh" class="btn">Refresh</button>
+      </div>
+    </section>
+
+    <!-- Record -->
     <section id="screen-record" class="screen">
-      <h2>Record Your Response</h2>
+      <div class="video-counter">
+        Video <span id="current-num">1</span> of <span id="total-num">0</span>
+        <span id="current-name" class="video-name"></span>
+      </div>
       <div class="video-stack">
         <div class="video-half">
           <video id="prerecorded-video" playsinline></video>
@@ -48,11 +61,13 @@
       </div>
       <div class="controls">
         <button id="btn-record" class="btn btn-record">Start Recording</button>
+        <button id="btn-skip" class="btn btn-secondary">Skip</button>
         <span id="rec-timer" class="timer" hidden>00:00</span>
       </div>
+      <p class="tip">Wear headphones for best audio quality</p>
     </section>
 
-    <!-- SCREEN 3: Preview split-screen -->
+    <!-- Preview -->
     <section id="screen-preview" class="screen">
       <h2>Preview Your Skit</h2>
       <div class="preview-container">
@@ -70,23 +85,37 @@
       </div>
     </section>
 
-    <!-- SCREEN 4: Merging / Done -->
-    <section id="screen-done" class="screen">
-      <div id="merging-state">
-        <h2>Merging Your Video...</h2>
+    <!-- Processing (merge + upload) -->
+    <section id="screen-processing" class="screen">
+      <div class="center-card">
+        <h2 id="processing-title">Processing...</h2>
+        <p id="processing-status">Preparing...</p>
         <div class="progress-container">
-          <div class="progress-bar"><div id="merge-bar" class="progress-fill"></div></div>
-          <span id="merge-percent">0%</span>
+          <div class="progress-bar"><div id="processing-bar" class="progress-fill"></div></div>
+          <span id="processing-percent">0%</span>
         </div>
       </div>
-      <div id="done-state" hidden>
-        <h2>Skit Complete!</h2>
-        <a id="download-link" class="btn btn-approve" download>Download Video</a>
-        <button id="btn-new" class="btn btn-secondary">Start New Skit</button>
+    </section>
+
+    <!-- Done -->
+    <section id="screen-done" class="screen">
+      <div class="center-card">
+        <h2>Skit Saved!</h2>
+        <p>Uploaded to your <strong>Omegle Complete</strong> folder in Google Drive</p>
+        <button id="btn-next" class="btn btn-approve">Next Video</button>
+      </div>
+    </section>
+
+    <!-- All Complete -->
+    <section id="screen-complete" class="screen">
+      <div class="center-card">
+        <h2>All Done!</h2>
+        <p>You've recorded responses for all available videos</p>
+        <button id="btn-check-new" class="btn">Check for New Videos</button>
       </div>
     </section>
   </main>
 
-  <script src="/js/app.js"></script>
+  <script type="module" src="/js/app.js"></script>
 </body>
 </html>

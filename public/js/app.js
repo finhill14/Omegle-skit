@@ -1,360 +1,667 @@
-(function () {
-  const state = {
-    sessionId: null,
-    prerecordedUrl: null,
-    webcamBlob: null,
-    webcamUrl: null,
-    jobId: null,
-    outputFilename: null
-  };
+const DRIVE_API = 'https://www.googleapis.com/drive/v3';
+const UPLOAD_API = 'https://www.googleapis.com/upload/drive/v3';
+const SOURCE_FOLDER = 'Omegle Source';
+const OUTPUT_FOLDER = 'Omegle Complete';
 
-  const screens = {
-    upload: document.getElementById('screen-upload'),
-    record: document.getElementById('screen-record'),
-    preview: document.getElementById('screen-preview'),
-    done: document.getElementById('screen-done')
-  };
+const state = {
+  accessToken: null,
+  tokenExpiry: 0,
+  sourceFolderId: null,
+  outputFolderId: null,
+  videos: [],
+  currentIndex: 0,
+  currentVideoBlob: null,
+  currentVideoUrl: null,
+  webcamBlob: null,
+  webcamUrl: null,
+  webcamMime: 'video/webm',
+  ffmpeg: null,
+  ffmpegLoaded: false
+};
 
-  function goTo(screen) {
-    Object.values(screens).forEach(s => s.classList.remove('active'));
-    screens[screen].classList.add('active');
+// ─── DOM Helpers ─────────────────────────────────────────
+const $ = id => document.getElementById(id);
+
+function goTo(screen) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  $(screen).classList.add('active');
+}
+
+// ─── Auth ────────────────────────────────────────────────
+function extractTokenFromHash() {
+  if (!window.location.hash) return false;
+  const params = new URLSearchParams(window.location.hash.slice(1));
+  const token = params.get('access_token');
+  const expiresIn = parseInt(params.get('expires_in')) || 3600;
+  if (!token) return false;
+  state.accessToken = token;
+  state.tokenExpiry = Date.now() + (expiresIn - 60) * 1000;
+  sessionStorage.setItem('access_token', token);
+  sessionStorage.setItem('token_expiry', String(state.tokenExpiry));
+  history.replaceState(null, '', '/');
+  return true;
+}
+
+function loadTokenFromSession() {
+  const token = sessionStorage.getItem('access_token');
+  const expiry = parseInt(sessionStorage.getItem('token_expiry'));
+  if (token && expiry > Date.now()) {
+    state.accessToken = token;
+    state.tokenExpiry = expiry;
+    return true;
+  }
+  return false;
+}
+
+async function refreshAccessToken() {
+  try {
+    const res = await fetch('/api/auth/refresh');
+    if (!res.ok) return false;
+    const data = await res.json();
+    state.accessToken = data.access_token;
+    state.tokenExpiry = Date.now() + ((data.expires_in || 3600) - 60) * 1000;
+    sessionStorage.setItem('access_token', data.access_token);
+    sessionStorage.setItem('token_expiry', String(state.tokenExpiry));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function getToken() {
+  if (state.accessToken && state.tokenExpiry > Date.now()) return state.accessToken;
+  const ok = await refreshAccessToken();
+  if (!ok) {
+    sessionStorage.clear();
+    goTo('screen-login');
+    throw new Error('Session expired. Please sign in again.');
+  }
+  return state.accessToken;
+}
+
+function logout() {
+  sessionStorage.clear();
+  window.location.href = '/api/auth/logout';
+}
+
+// ─── Drive API ───────────────────────────────────────────
+async function driveGet(path, params = {}) {
+  const token = await getToken();
+  const url = new URL(`${DRIVE_API}${path}`);
+  Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  if (res.status === 401) {
+    const refreshed = await refreshAccessToken();
+    if (!refreshed) throw new Error('Session expired. Please sign in again.');
+    const retry = await fetch(url, { headers: { Authorization: `Bearer ${state.accessToken}` } });
+    if (!retry.ok) throw new Error(`Drive API error: ${retry.status}`);
+    return retry.json();
+  }
+  if (!res.ok) throw new Error(`Drive API error: ${res.status}`);
+  return res.json();
+}
+
+async function findFolder(name) {
+  const data = await driveGet('/files', {
+    q: `name='${name}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+    fields: 'files(id,name)',
+    spaces: 'drive'
+  });
+  return data.files[0] || null;
+}
+
+async function createFolder(name) {
+  const token = await getToken();
+  const res = await fetch(`${DRIVE_API}/files`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ name, mimeType: 'application/vnd.google-apps.folder' })
+  });
+  if (!res.ok) throw new Error('Failed to create folder');
+  return res.json();
+}
+
+async function findOrCreateFolder(name) {
+  let folder = await findFolder(name);
+  if (!folder) folder = await createFolder(name);
+  return folder.id;
+}
+
+async function listVideos(folderId) {
+  const data = await driveGet('/files', {
+    q: `'${folderId}' in parents and mimeType contains 'video/' and trashed=false`,
+    fields: 'files(id,name,mimeType)',
+    orderBy: 'name',
+    pageSize: '1000'
+  });
+  return data.files || [];
+}
+
+async function downloadFile(fileId, onProgress) {
+  const token = await getToken();
+  const res = await fetch(
+    `${DRIVE_API}/files/${fileId}?alt=media&access_token=${encodeURIComponent(token)}`
+  );
+  if (!res.ok) throw new Error(`Download failed: ${res.status}`);
+
+  const contentType = res.headers.get('content-type') || 'video/mp4';
+  const contentLength = res.headers.get('content-length');
+
+  if (!contentLength || !res.body) {
+    return new Blob([await res.arrayBuffer()], { type: contentType });
   }
 
-  // ─── UPLOAD ────────────────────────────────────────────
-  const dropzone = document.getElementById('dropzone');
-  const fileInput = document.getElementById('file-input');
-  const uploadProgress = document.getElementById('upload-progress');
-  const uploadBar = document.getElementById('upload-bar');
-  const uploadPercent = document.getElementById('upload-percent');
+  const reader = res.body.getReader();
+  const total = parseInt(contentLength);
+  const chunks = [];
+  let received = 0;
 
-  dropzone.addEventListener('dragover', e => {
-    e.preventDefault();
-    dropzone.classList.add('dragover');
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    received += value.length;
+    if (onProgress) onProgress(received / total);
+  }
+
+  return new Blob(chunks, { type: contentType });
+}
+
+async function uploadToDrive(blob, name, folderId, onProgress) {
+  const token = await getToken();
+
+  const initRes = await fetch(`${UPLOAD_API}/files?uploadType=resumable`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      'X-Upload-Content-Type': 'video/mp4',
+      'X-Upload-Content-Length': String(blob.size)
+    },
+    body: JSON.stringify({ name, parents: [folderId], mimeType: 'video/mp4' })
   });
 
-  dropzone.addEventListener('dragleave', () => {
-    dropzone.classList.remove('dragover');
-  });
+  if (!initRes.ok) throw new Error(`Upload init failed: ${initRes.status}`);
+  const uploadUrl = initRes.headers.get('Location');
+  if (!uploadUrl) throw new Error('Upload failed: no upload URL received from Google Drive');
 
-  dropzone.addEventListener('drop', e => {
-    e.preventDefault();
-    dropzone.classList.remove('dragover');
-    if (e.dataTransfer.files.length) uploadFile(e.dataTransfer.files[0]);
-  });
-
-  fileInput.addEventListener('change', () => {
-    if (fileInput.files.length) uploadFile(fileInput.files[0]);
-  });
-
-  function uploadFile(file) {
-    if (!file.type.startsWith('video/')) {
-      alert('Please select a video file.');
-      return;
-    }
-
-    const formData = new FormData();
-    formData.append('video', file);
-
+  return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    uploadProgress.hidden = false;
-
+    xhr.open('PUT', uploadUrl);
+    xhr.setRequestHeader('Content-Type', 'video/mp4');
     xhr.upload.onprogress = e => {
-      if (e.lengthComputable) {
-        const pct = Math.round((e.loaded / e.total) * 100);
-        uploadBar.style.width = pct + '%';
-        uploadPercent.textContent = pct + '%';
-      }
+      if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total);
     };
-
     xhr.onload = () => {
-      if (xhr.status === 200) {
-        const data = JSON.parse(xhr.responseText);
-        state.sessionId = data.sessionId;
-        state.prerecordedUrl = `/uploads/${data.sessionId}/${data.filename}`;
-        initRecordScreen();
-        goTo('record');
-      } else {
-        alert('Upload failed: ' + xhr.responseText);
-      }
+      if (xhr.status >= 200 && xhr.status < 300) resolve(JSON.parse(xhr.responseText));
+      else reject(new Error(`Upload failed: ${xhr.status}`));
     };
+    xhr.onerror = () => reject(new Error('Upload network error'));
+    xhr.send(blob);
+  });
+}
 
-    xhr.onerror = () => alert('Upload failed. Please try again.');
-    xhr.open('POST', '/api/upload');
-    xhr.send(formData);
+// ─── FFmpeg ──────────────────────────────────────────────
+async function loadFFmpeg(onStatus) {
+  if (state.ffmpegLoaded) return;
+
+  if (onStatus) onStatus('Downloading video processor...');
+
+  const { FFmpeg } = await import('https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/esm/index.js');
+  const { toBlobURL } = await import('https://unpkg.com/@ffmpeg/util@0.12.1/dist/esm/index.js');
+
+  const ffmpeg = new FFmpeg();
+  const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm';
+
+  if (onStatus) onStatus('Loading FFmpeg core (~30MB)...');
+
+  const coreURL = await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript');
+  const wasmURL = await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm');
+  await ffmpeg.load({ coreURL, wasmURL });
+
+  state.ffmpeg = ffmpeg;
+  state.ffmpegLoaded = true;
+}
+
+async function mergeVideos(sourceBlob, webcamBlob, onProgress) {
+  const ffmpeg = state.ffmpeg;
+
+  const { fetchFile } = await import('https://unpkg.com/@ffmpeg/util@0.12.1/dist/esm/index.js');
+
+  const sourceName = state.videos[state.currentIndex]?.name || 'video.mp4';
+  const sourceExt = sourceName.includes('.') ? sourceName.split('.').pop() : 'mp4';
+  const webcamExt = state.webcamMime.includes('mp4') ? 'mp4' : 'webm';
+
+  const progressHandler = ({ progress }) => {
+    if (onProgress) onProgress(Math.max(0, Math.min(1, progress)));
+  };
+  ffmpeg.on('progress', progressHandler);
+
+  await ffmpeg.writeFile(`source.${sourceExt}`, await fetchFile(sourceBlob));
+  await ffmpeg.writeFile(`webcam.${webcamExt}`, await fetchFile(webcamBlob));
+
+  const videoFilter =
+    `[0:v]scale=1080:960:force_original_aspect_ratio=decrease,pad=1080:960:(ow-iw)/2:(oh-ih)/2:black,setsar=1[top];` +
+    `[1:v]scale=1080:960:force_original_aspect_ratio=decrease,pad=1080:960:(ow-iw)/2:(oh-ih)/2:black,setsar=1[bottom];` +
+    `[top][bottom]vstack=inputs=2[v]`;
+
+  let exitCode = await ffmpeg.exec([
+    '-i', `source.${sourceExt}`, '-i', `webcam.${webcamExt}`,
+    '-filter_complex', videoFilter + ';[0:a][1:a]amix=inputs=2:duration=shortest[a]',
+    '-map', '[v]', '-map', '[a]',
+    '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23',
+    '-c:a', 'aac', '-b:a', '128k',
+    '-shortest', '-movflags', '+faststart',
+    '-y', 'output.mp4'
+  ]);
+
+  if (exitCode !== 0) {
+    exitCode = await ffmpeg.exec([
+      '-i', `source.${sourceExt}`, '-i', `webcam.${webcamExt}`,
+      '-filter_complex', videoFilter,
+      '-map', '[v]', '-map', '1:a',
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23',
+      '-c:a', 'aac', '-b:a', '128k',
+      '-shortest', '-movflags', '+faststart',
+      '-y', 'output.mp4'
+    ]);
   }
 
-  // ─── RECORD ────────────────────────────────────────────
-  const prerecordedVideo = document.getElementById('prerecorded-video');
-  const webcamPreview = document.getElementById('webcam-preview');
-  const btnRecord = document.getElementById('btn-record');
-  const recTimer = document.getElementById('rec-timer');
-
-  let mediaRecorder = null;
-  let webcamStream = null;
-  let recordedChunks = [];
-  let timerInterval = null;
-  let isRecording = false;
-
-  async function initRecordScreen() {
-    prerecordedVideo.src = state.prerecordedUrl;
-    prerecordedVideo.load();
-
-    try {
-      webcamStream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 1080 }, height: { ideal: 1920 }, facingMode: 'user' },
-        audio: true
-      });
-      webcamPreview.srcObject = webcamStream;
-    } catch (err) {
-      alert('Camera access denied. Please allow camera and microphone access.');
-    }
+  if (exitCode !== 0) {
+    exitCode = await ffmpeg.exec([
+      '-i', `source.${sourceExt}`, '-i', `webcam.${webcamExt}`,
+      '-filter_complex', videoFilter,
+      '-map', '[v]',
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23',
+      '-shortest', '-movflags', '+faststart',
+      '-y', 'output.mp4'
+    ]);
   }
 
-  function getMimeType() {
-    const types = [
-      'video/webm;codecs=vp9,opus',
-      'video/webm;codecs=vp8,opus',
-      'video/webm',
-      'video/mp4'
-    ];
-    return types.find(t => MediaRecorder.isTypeSupported(t)) || '';
+  ffmpeg.off('progress', progressHandler);
+
+  if (exitCode !== 0) throw new Error('Video merge failed');
+
+  const data = await ffmpeg.readFile('output.mp4');
+  await ffmpeg.deleteFile(`source.${sourceExt}`).catch(() => {});
+  await ffmpeg.deleteFile(`webcam.${webcamExt}`).catch(() => {});
+  await ffmpeg.deleteFile('output.mp4').catch(() => {});
+
+  return new Blob([data], { type: 'video/mp4' });
+}
+
+// ─── Camera & Recording ─────────────────────────────────
+const prerecordedVideo = $('prerecorded-video');
+const webcamPreview = $('webcam-preview');
+const btnRecord = $('btn-record');
+const recTimer = $('rec-timer');
+
+let webcamStream = null;
+let mediaRecorder = null;
+let recordedChunks = [];
+let timerInterval = null;
+let isRecording = false;
+
+function getMimeType() {
+  const types = [
+    'video/webm;codecs=vp9,opus',
+    'video/webm;codecs=vp8,opus',
+    'video/webm',
+    'video/mp4'
+  ];
+  return types.find(t => MediaRecorder.isTypeSupported(t)) || '';
+}
+
+async function initCamera() {
+  if (webcamStream) return;
+  webcamStream = await navigator.mediaDevices.getUserMedia({
+    video: { width: { ideal: 1080 }, height: { ideal: 1920 }, facingMode: 'user' },
+    audio: true
+  });
+  webcamPreview.srcObject = webcamStream;
+}
+
+function stopCamera() {
+  if (webcamStream) {
+    webcamStream.getTracks().forEach(t => t.stop());
+    webcamStream = null;
+  }
+  webcamPreview.srcObject = null;
+}
+
+function startRecording() {
+  if (!webcamStream) {
+    alert('Camera not available.');
+    return;
   }
 
-  btnRecord.addEventListener('click', () => {
-    if (!isRecording) {
-      startRecording();
-    } else {
-      stopRecording();
-    }
+  recordedChunks = [];
+  const mimeType = getMimeType();
+  state.webcamMime = mimeType || 'video/webm';
+
+  mediaRecorder = new MediaRecorder(webcamStream, {
+    mimeType: mimeType || undefined,
+    videoBitsPerSecond: 2500000
   });
 
-  function startRecording() {
-    if (!webcamStream) {
-      alert('No camera available.');
-      return;
-    }
+  mediaRecorder.ondataavailable = e => {
+    if (e.data.size > 0) recordedChunks.push(e.data);
+  };
 
-    recordedChunks = [];
-    const mimeType = getMimeType();
+  mediaRecorder.onstop = () => {
+    state.webcamBlob = new Blob(recordedChunks, { type: state.webcamMime });
+    if (state.webcamUrl) URL.revokeObjectURL(state.webcamUrl);
+    state.webcamUrl = URL.createObjectURL(state.webcamBlob);
+    stopCamera();
+    initPreview();
+    goTo('screen-preview');
+  };
 
-    mediaRecorder = new MediaRecorder(webcamStream, {
-      mimeType: mimeType || undefined,
-      videoBitsPerSecond: 2500000
-    });
+  mediaRecorder.start(1000);
+  prerecordedVideo.currentTime = 0;
+  prerecordedVideo.play().catch(() => {});
 
-    mediaRecorder.ondataavailable = e => {
-      if (e.data.size > 0) recordedChunks.push(e.data);
-    };
+  isRecording = true;
+  btnRecord.textContent = 'Stop Recording';
+  btnRecord.classList.add('recording');
+  recTimer.hidden = false;
 
-    mediaRecorder.onstop = () => {
-      const mType = mimeType || 'video/webm';
-      state.webcamBlob = new Blob(recordedChunks, { type: mType });
-      if (state.webcamUrl) URL.revokeObjectURL(state.webcamUrl);
-      state.webcamUrl = URL.createObjectURL(state.webcamBlob);
-      uploadRecording();
-    };
+  let seconds = 0;
+  timerInterval = setInterval(() => {
+    seconds++;
+    const m = String(Math.floor(seconds / 60)).padStart(2, '0');
+    const s = String(seconds % 60).padStart(2, '0');
+    recTimer.textContent = `${m}:${s}`;
+  }, 1000);
 
-    mediaRecorder.start(1000);
-    prerecordedVideo.currentTime = 0;
-    prerecordedVideo.play();
+  prerecordedVideo.onended = () => {
+    if (isRecording) stopRecording();
+  };
+}
 
-    isRecording = true;
-    btnRecord.textContent = 'Stop Recording';
-    btnRecord.classList.add('recording');
-    recTimer.hidden = false;
-
-    let seconds = 0;
-    timerInterval = setInterval(() => {
-      seconds++;
-      const m = String(Math.floor(seconds / 60)).padStart(2, '0');
-      const s = String(seconds % 60).padStart(2, '0');
-      recTimer.textContent = `${m}:${s}`;
-    }, 1000);
-
-    prerecordedVideo.onended = () => {
-      if (isRecording) stopRecording();
-    };
+function stopRecording() {
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+    mediaRecorder.stop();
   }
+  prerecordedVideo.pause();
+  isRecording = false;
+  btnRecord.textContent = 'Start Recording';
+  btnRecord.classList.remove('recording');
+  clearInterval(timerInterval);
+}
 
-  function stopRecording() {
-    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-      mediaRecorder.stop();
-    }
-    prerecordedVideo.pause();
-    isRecording = false;
-    btnRecord.textContent = 'Start Recording';
-    btnRecord.classList.remove('recording');
-    clearInterval(timerInterval);
+btnRecord.addEventListener('click', () => {
+  if (!isRecording) startRecording();
+  else stopRecording();
+});
+
+// ─── Preview ─────────────────────────────────────────────
+const previewTop = $('preview-top');
+const previewBottom = $('preview-bottom');
+const btnPlayPreview = $('btn-play-preview');
+let syncInterval = null;
+
+function initPreview() {
+  previewTop.src = state.currentVideoUrl;
+  previewBottom.src = state.webcamUrl;
+  previewTop.load();
+  previewBottom.load();
+  btnPlayPreview.textContent = 'Play Preview';
+  clearSync();
+}
+
+function clearSync() {
+  if (syncInterval) {
+    clearInterval(syncInterval);
+    syncInterval = null;
   }
+}
 
-  function uploadRecording() {
-    const formData = new FormData();
-    formData.append('recording', state.webcamBlob, 'webcam.webm');
+btnPlayPreview.addEventListener('click', () => {
+  if (previewTop.paused) {
+    previewTop.currentTime = 0;
+    previewBottom.currentTime = 0;
+    previewTop.play().catch(() => {});
+    previewBottom.play().catch(() => {});
+    btnPlayPreview.textContent = 'Pause';
 
-    const xhr = new XMLHttpRequest();
-    xhr.onload = () => {
-      if (xhr.status === 200) {
-        stopWebcam();
-        initPreviewScreen();
-        goTo('preview');
-      } else {
-        alert('Failed to upload recording. Please try again.');
-      }
-    };
-    xhr.onerror = () => alert('Failed to upload recording.');
-    xhr.open('POST', '/api/record');
-    xhr.setRequestHeader('X-Session-Id', state.sessionId);
-    xhr.send(formData);
-  }
-
-  function stopWebcam() {
-    if (webcamStream) {
-      webcamStream.getTracks().forEach(t => t.stop());
-      webcamStream = null;
-    }
-    webcamPreview.srcObject = null;
-  }
-
-  // ─── PREVIEW ───────────────────────────────────────────
-  const previewTop = document.getElementById('preview-top');
-  const previewBottom = document.getElementById('preview-bottom');
-  const btnPlayPreview = document.getElementById('btn-play-preview');
-  const btnRerecord = document.getElementById('btn-rerecord');
-  const btnApprove = document.getElementById('btn-approve');
-
-  function initPreviewScreen() {
-    previewTop.src = state.prerecordedUrl;
-    previewBottom.src = state.webcamUrl;
-    previewTop.load();
-    previewBottom.load();
-    btnPlayPreview.textContent = 'Play Preview';
-  }
-
-  btnPlayPreview.addEventListener('click', () => {
-    if (previewTop.paused) {
-      previewTop.currentTime = 0;
-      previewBottom.currentTime = 0;
-      previewTop.play();
-      previewBottom.play();
-      btnPlayPreview.textContent = 'Pause';
-
-      const syncInterval = setInterval(() => {
-        if (previewTop.paused || previewTop.ended) {
-          clearInterval(syncInterval);
-          return;
-        }
-        const drift = Math.abs(previewTop.currentTime - previewBottom.currentTime);
-        if (drift > 0.1) {
-          previewBottom.currentTime = previewTop.currentTime;
-        }
-      }, 500);
-    } else {
-      previewTop.pause();
-      previewBottom.pause();
-      btnPlayPreview.textContent = 'Play Preview';
-    }
-  });
-
-  previewTop.addEventListener('ended', () => {
-    previewBottom.pause();
-    btnPlayPreview.textContent = 'Play Preview';
-  });
-
-  btnRerecord.addEventListener('click', () => {
-    previewTop.pause();
-    previewBottom.pause();
-    initRecordScreen();
-    goTo('record');
-  });
-
-  btnApprove.addEventListener('click', () => {
-    previewTop.pause();
-    previewBottom.pause();
-    startMerge();
-  });
-
-  // ─── MERGE / DONE ─────────────────────────────────────
-  const mergingState = document.getElementById('merging-state');
-  const doneState = document.getElementById('done-state');
-  const mergeBar = document.getElementById('merge-bar');
-  const mergePercent = document.getElementById('merge-percent');
-  const downloadLink = document.getElementById('download-link');
-  const btnNew = document.getElementById('btn-new');
-
-  function startMerge() {
-    mergingState.hidden = false;
-    doneState.hidden = true;
-    mergeBar.style.width = '0%';
-    mergePercent.textContent = '0%';
-    goTo('done');
-
-    fetch('/api/merge', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sessionId: state.sessionId })
-    })
-      .then(r => r.json())
-      .then(data => {
-        if (data.error) {
-          alert('Merge failed: ' + data.error);
-          return;
-        }
-        state.jobId = data.jobId;
-        state.outputFilename = data.outputFilename;
-        watchProgress(data.jobId, data.outputFilename);
-      })
-      .catch(err => alert('Merge request failed: ' + err.message));
-  }
-
-  function watchProgress(jobId, filename) {
-    const source = new EventSource(`/api/status/${jobId}?filename=${encodeURIComponent(filename)}`);
-
-    source.onmessage = e => {
-      const data = JSON.parse(e.data);
-
-      if (data.error) {
-        source.close();
-        alert('Merge error: ' + data.error);
-        goTo('preview');
+    clearSync();
+    syncInterval = setInterval(() => {
+      if (previewTop.paused || previewTop.ended) {
+        clearSync();
         return;
       }
+      const drift = Math.abs(previewTop.currentTime - previewBottom.currentTime);
+      if (drift > 0.1) previewBottom.currentTime = previewTop.currentTime;
+    }, 500);
+  } else {
+    previewTop.pause();
+    previewBottom.pause();
+    clearSync();
+    btnPlayPreview.textContent = 'Play Preview';
+  }
+});
 
-      if (data.percent !== undefined) {
-        mergeBar.style.width = data.percent + '%';
-        mergePercent.textContent = data.percent + '%';
-      }
+previewTop.addEventListener('ended', () => {
+  previewBottom.pause();
+  clearSync();
+  btnPlayPreview.textContent = 'Play Preview';
+});
 
-      if (data.done) {
-        source.close();
-        mergeBar.style.width = '100%';
-        mergePercent.textContent = '100%';
-        mergingState.hidden = true;
-        doneState.hidden = false;
-        downloadLink.href = data.outputUrl;
-        downloadLink.textContent = 'Download Video';
-      }
-    };
+$('btn-rerecord').addEventListener('click', async () => {
+  previewTop.pause();
+  previewBottom.pause();
+  clearSync();
+  recTimer.textContent = '00:00';
+  recTimer.hidden = true;
+  try {
+    await initCamera();
+    goTo('screen-record');
+  } catch (err) {
+    alert('Camera access failed: ' + err.message);
+  }
+});
 
-    source.onerror = () => {
-      source.close();
-    };
+$('btn-approve').addEventListener('click', () => {
+  previewTop.pause();
+  previewBottom.pause();
+  clearSync();
+  processAndUpload();
+});
+
+// ─── Processing ──────────────────────────────────────────
+async function processAndUpload() {
+  goTo('screen-processing');
+  const statusEl = $('processing-status');
+  const barEl = $('processing-bar');
+  const pctEl = $('processing-percent');
+  const titleEl = $('processing-title');
+
+  function setProgress(pct) {
+    barEl.style.width = pct + '%';
+    pctEl.textContent = Math.round(pct) + '%';
   }
 
-  btnNew.addEventListener('click', () => {
-    state.sessionId = null;
-    state.prerecordedUrl = null;
-    state.webcamBlob = null;
-    state.webcamUrl = null;
-    state.jobId = null;
-    state.outputFilename = null;
-    uploadProgress.hidden = true;
-    uploadBar.style.width = '0%';
-    uploadPercent.textContent = '0%';
-    fileInput.value = '';
-    goTo('upload');
-  });
+  try {
+    titleEl.textContent = 'Loading FFmpeg...';
+    statusEl.textContent = 'Downloading video processor (first time only)...';
+    setProgress(0);
 
+    await loadFFmpeg(msg => { statusEl.textContent = msg; });
+
+    titleEl.textContent = 'Merging Video...';
+    statusEl.textContent = 'Combining top & bottom into 9:16...';
+    setProgress(0);
+
+    const mergedBlob = await mergeVideos(
+      state.currentVideoBlob,
+      state.webcamBlob,
+      p => setProgress(p * 100)
+    );
+
+    titleEl.textContent = 'Uploading to Drive...';
+    statusEl.textContent = 'Saving to Omegle Complete folder...';
+    setProgress(0);
+
+    const sourceName = state.videos[state.currentIndex].name;
+    const outputName = `skit_${sourceName.replace(/\.[^.]+$/, '')}.mp4`;
+
+    await uploadToDrive(mergedBlob, outputName, state.outputFolderId, p => setProgress(p * 100));
+
+    goTo('screen-done');
+  } catch (err) {
+    alert('Processing failed: ' + err.message);
+    goTo('screen-preview');
+  }
+}
+
+// ─── Navigation ──────────────────────────────────────────
+async function loadVideoList() {
+  goTo('screen-loading');
+  $('loading-status').textContent = 'Finding your Drive folders...';
+
+  try {
+    const [sourceId, outputId] = await Promise.all([
+      findOrCreateFolder(SOURCE_FOLDER),
+      findOrCreateFolder(OUTPUT_FOLDER)
+    ]);
+    state.sourceFolderId = sourceId;
+    state.outputFolderId = outputId;
+
+    $('loading-status').textContent = 'Loading video list...';
+
+    const [sourceVideos, completedVideos] = await Promise.all([
+      listVideos(sourceId),
+      listVideos(outputId)
+    ]);
+
+    const completedSet = new Set(
+      completedVideos.map(f => f.name.replace(/^skit_/, '').replace(/\.[^.]+$/, ''))
+    );
+
+    state.videos = sourceVideos.filter(v => {
+      const baseName = v.name.replace(/\.[^.]+$/, '');
+      return !completedSet.has(baseName);
+    });
+
+    state.currentIndex = 0;
+
+    if (state.videos.length === 0 && sourceVideos.length === 0) {
+      goTo('screen-empty');
+    } else if (state.videos.length === 0) {
+      goTo('screen-complete');
+    } else {
+      await loadCurrentVideo();
+    }
+  } catch (err) {
+    if (err.message.includes('Session expired') || err.message.includes('Not authenticated')) {
+      goTo('screen-login');
+      $('btn-logout').hidden = true;
+    } else {
+      alert('Failed to load videos: ' + err.message);
+      goTo('screen-empty');
+    }
+  }
+}
+
+async function loadCurrentVideo() {
+  const video = state.videos[state.currentIndex];
+  if (!video) {
+    goTo('screen-complete');
+    return;
+  }
+
+  goTo('screen-loading');
+  $('loading-status').textContent = `Downloading: ${video.name}`;
+  $('loading-progress').hidden = false;
+
+  try {
+    state.currentVideoBlob = await downloadFile(video.id, p => {
+      $('loading-bar').style.width = (p * 100) + '%';
+      $('loading-percent').textContent = Math.round(p * 100) + '%';
+    });
+
+    if (state.currentVideoUrl) URL.revokeObjectURL(state.currentVideoUrl);
+    state.currentVideoUrl = URL.createObjectURL(state.currentVideoBlob);
+
+    prerecordedVideo.src = state.currentVideoUrl;
+    prerecordedVideo.load();
+
+    $('current-num').textContent = state.currentIndex + 1;
+    $('total-num').textContent = state.videos.length;
+    $('current-name').textContent = video.name;
+    recTimer.textContent = '00:00';
+    recTimer.hidden = true;
+
+    $('loading-progress').hidden = true;
+    $('loading-bar').style.width = '0%';
+  } catch (err) {
+    $('loading-progress').hidden = true;
+    alert('Failed to download video: ' + err.message);
+    goTo('screen-empty');
+    return;
+  }
+
+  try {
+    await initCamera();
+  } catch (err) {
+    alert('Camera access denied. Please allow camera and microphone access and reload the page.');
+    goTo('screen-empty');
+    return;
+  }
+
+  goTo('screen-record');
+}
+
+$('btn-skip').addEventListener('click', () => {
+  if (isRecording) {
+    if (mediaRecorder) mediaRecorder.onstop = null;
+    stopRecording();
+  }
+  stopCamera();
+  state.currentIndex++;
+  if (state.currentIndex >= state.videos.length) {
+    goTo('screen-complete');
+  } else {
+    loadCurrentVideo();
+  }
+});
+
+$('btn-next').addEventListener('click', () => {
+  state.currentIndex++;
+  if (state.currentIndex >= state.videos.length) {
+    goTo('screen-complete');
+  } else {
+    loadCurrentVideo();
+  }
+});
+
+$('btn-refresh').addEventListener('click', () => loadVideoList());
+$('btn-check-new').addEventListener('click', () => loadVideoList());
+$('btn-logout').addEventListener('click', logout);
+
+// ─── Init ────────────────────────────────────────────────
+async function init() {
   if (!window.MediaRecorder) {
     alert('Your browser does not support video recording. Please use Chrome or Firefox.');
+    return;
   }
-})();
+
+  const hasToken = extractTokenFromHash() || loadTokenFromSession();
+
+  if (!hasToken) {
+    const refreshed = await refreshAccessToken();
+    if (!refreshed) {
+      goTo('screen-login');
+      return;
+    }
+  }
+
+  $('btn-logout').hidden = false;
+  await loadVideoList();
+}
+
+init();
