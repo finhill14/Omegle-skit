@@ -112,9 +112,7 @@ async function listVideos(folderId) {
 }
 
 async function downloadFile(fileId, onProgress) {
-  const token = await getToken();
-  const url = `${DRIVE_API}/files/${fileId}?alt=media&acknowledgeAbuse=true&supportsAllDrives=true&access_token=${encodeURIComponent(token)}`;
-  const res = await fetch(url);
+  const res = await fetch(`/api/video?id=${encodeURIComponent(fileId)}`);
   if (!res.ok) {
     let body = '';
     try { body = await res.text(); } catch {}
