@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pitch Detection Test</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0a0a0a; color: #fff; padding: 1.5rem; }
+    h1 { color: #4fc3f7; margin-bottom: 0.25rem; font-size: 1.4rem; }
+    .subtitle { color: #666; font-size: 0.85rem; margin-bottom: 1.5rem; }
+    section { background: #111; border: 1px solid #222; border-radius: 8px; padding: 1rem; margin-bottom: 1rem; }
+    h2 { font-size: 0.9rem; color: #888; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.75rem; }
+    .row { display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; }
+    label { font-size: 0.9rem; color: #aaa; }
+    input[type="file"] { color: #fff; font-size: 0.85rem; }
+    input[type="file"]::file-selector-button {
+      background: #333; color: #fff; border: 1px solid #555; border-radius: 6px;
+      padding: 0.4rem 0.8rem; cursor: pointer; font-size: 0.85rem; margin-right: 0.5rem;
+    }
+    video { width: 100%; max-width: 480px; border-radius: 6px; background: #000; display: block; }
+    .btn { padding: 0.55rem 1.1rem; border: none; border-radius: 7px; font-size: 0.9rem; font-weight: 600; cursor: pointer; color: #fff; background: #333; }
+    .btn:hover { background: #444; }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-primary { background: #4fc3f7; color: #000; }
+    .btn-primary:hover { background: #81d4fa; }
+    .btn-green { background: #43a047; }
+    .btn-green:hover { background: #66bb6a; }
+    .btn-pink { background: #c2185b; }
+    .btn-pink:hover { background: #e91e63; }
+    #status { font-size: 0.85rem; color: #aaa; margin-top: 0.5rem; min-height: 1.2em; }
+    .progress-bar { height: 6px; background: #222; border-radius: 3px; overflow: hidden; margin-top: 0.5rem; }
+    .progress-fill { height: 100%; background: #4fc3f7; border-radius: 3px; width: 0; transition: width 0.1s; }
+    /* Timeline */
+    #timeline-wrap { position: relative; }
+    #timeline-canvas { width: 100%; height: 44px; border-radius: 4px; cursor: pointer; display: block; }
+    .timeline-legend { display: flex; gap: 1rem; margin-top: 0.4rem; font-size: 0.75rem; color: #666; }
+    .legend-dot { width: 10px; height: 10px; border-radius: 2px; display: inline-block; margin-right: 4px; vertical-align: middle; }
+    /* Segments table */
+    .seg-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+    .seg-table th { text-align: left; color: #555; font-weight: 600; padding: 0.3rem 0.5rem; border-bottom: 1px solid #222; }
+    .seg-table td { padding: 0.3rem 0.5rem; border-bottom: 1px solid #1a1a1a; font-variant-numeric: tabular-nums; }
+    .seg-table tr.female td { color: #f48fb1; }
+    .seg-table tr.male td { color: #81d4fa; }
+    .seg-table tr.silence td { color: #555; }
+    /* JSON output */
+    pre { background: #0d0d0d; border: 1px solid #1e1e1e; border-radius: 6px; padding: 0.75rem; font-size: 0.78rem; color: #4fc3f7; overflow-x: auto; max-height: 200px; }
+    .note { background: #1a2a1a; border-left: 3px solid #43a047; padding: 0.6rem 0.75rem; border-radius: 4px; font-size: 0.82rem; color: #aaa; }
+    .note strong { color: #66bb6a; }
+  </style>
+</head>
+<body>
+
+<h1>Pitch Detection Test</h1>
+<p class="subtitle">Test female-voice detection on source videos before enabling it in the app. No data leaves your browser.</p>
+
+<section>
+  <h2>1 — Load a source video</h2>
+  <div class="row">
+    <input type="file" id="file-input" accept="video/*,audio/*">
+  </div>
+  <video id="video-el" controls style="margin-top:0.75rem"></video>
+</section>
+
+<section>
+  <h2>2 — Analyse audio</h2>
+  <div class="row">
+    <button class="btn btn-primary" id="btn-analyze" disabled>Analyse</button>
+    <label>Downsample to 8 kHz, autocorrelation pitch per 64 ms frame</label>
+  </div>
+  <div id="status">Load a video to begin.</div>
+  <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
+</section>
+
+<section id="results-section" hidden>
+  <h2>3 — Timeline</h2>
+  <div id="timeline-wrap">
+    <canvas id="timeline-canvas"></canvas>
+  </div>
+  <div class="timeline-legend">
+    <span><span class="legend-dot" style="background:#81d4fa"></span>Male</span>
+    <span><span class="legend-dot" style="background:#f48fb1"></span>Female</span>
+    <span><span class="legend-dot" style="background:#555"></span>Silence / unclear</span>
+  </div>
+
+  <h2 style="margin-top:1rem">4 — Playback</h2>
+  <div class="row">
+    <button class="btn btn-green" id="btn-normal">▶ Normal playback</button>
+    <button class="btn btn-pink" id="btn-muted">▶ Female parts muted</button>
+    <button class="btn" id="btn-stop">■ Stop</button>
+  </div>
+  <p style="color:#666;font-size:0.8rem;margin-top:0.4rem">Use "female parts muted" to judge whether the detection is accurate before enabling it in the app.</p>
+
+  <h2 style="margin-top:1rem">5 — Detected segments</h2>
+  <div style="max-height:220px;overflow-y:auto">
+    <table class="seg-table">
+      <thead><tr><th>Start</th><th>End</th><th>Duration</th><th>Type</th><th>Avg Hz</th></tr></thead>
+      <tbody id="seg-tbody"></tbody>
+    </table>
+  </div>
+
+  <h2 style="margin-top:1rem">6 — Mute regions JSON</h2>
+  <p style="color:#666;font-size:0.8rem;margin-bottom:0.4rem">These are the regions that would be muted in the source audio during merge.</p>
+  <pre id="json-out"></pre>
+  <div class="row" style="margin-top:0.5rem">
+    <button class="btn" id="btn-copy">Copy JSON</button>
+    <button class="btn" id="btn-download-json">Download JSON</button>
+  </div>
+
+  <div class="note" style="margin-top:1rem">
+    <strong>Next step:</strong> If accuracy looks good on your videos, let me know and I'll wire this into the main app — it'll run automatically on each source video and cache the results in Drive.
+  </div>
+</section>
+
+<script>
+// ─── State ────────────────────────────────────────────────
+let segments = [];
+let duration = 0;
+let muteRegions = [];
+let audioCtx = null;
+let mediaSource = null;
+let gainNode = null;
+let mutedMode = false;
+
+// ─── File loading ─────────────────────────────────────────
+const fileInput = document.getElementById('file-input');
+const videoEl = document.getElementById('video-el');
+const btnAnalyze = document.getElementById('btn-analyze');
+
+fileInput.addEventListener('change', () => {
+  const file = fileInput.files[0];
+  if (!file) return;
+  videoEl.src = URL.createObjectURL(file);
+  videoEl.load();
+  btnAnalyze.disabled = false;
+  document.getElementById('results-section').hidden = true;
+  document.getElementById('status').textContent = 'Ready to analyse.';
+  document.getElementById('progress-fill').style.width = '0';
+  teardownAudioRouting();
+});
+
+// ─── Pitch detection core ─────────────────────────────────
+function analyzeFrame(samples, sampleRate) {
+  const n = samples.length;
+
+  // RMS silence check
+  let rms = 0;
+  for (let i = 0; i < n; i++) rms += samples[i] * samples[i];
+  rms = Math.sqrt(rms / n);
+  if (rms < 0.008) return { type: 'silence', hz: 0 };
+
+  // Autocorrelation over voice range 60–600 Hz
+  const minLag = Math.floor(sampleRate / 600);
+  const maxLag = Math.min(Math.ceil(sampleRate / 60), n - 1);
+
+  let ac0 = 0;
+  for (let i = 0; i < n; i++) ac0 += samples[i] * samples[i];
+  if (ac0 === 0) return { type: 'silence', hz: 0 };
+
+  let bestLag = -1, bestNorm = 0;
+  for (let lag = minLag; lag <= maxLag; lag++) {
+    let ac = 0;
+    for (let i = 0; i < n - lag; i++) ac += samples[i] * samples[i + lag];
+    const norm = ac / ac0;
+    if (norm > bestNorm) { bestNorm = norm; bestLag = lag; }
+  }
+
+  // Confidence threshold — below this it's noisy/music/unclear
+  if (bestNorm < 0.42 || bestLag < 0) return { type: rms > 0.05 ? 'unclear' : 'silence', hz: 0 };
+
+  const hz = sampleRate / bestLag;
+  // Female fundamental: 165–350 Hz  |  Male: 85–165 Hz  |  overlap zone → unclear
+  const type = hz > 170 ? 'female' : hz < 150 ? 'male' : 'unclear';
+  return { type, hz, confidence: bestNorm };
+}
+
+function medianFilter(arr, k) {
+  // Median over a window of k frames for smoothing jitter
+  const half = Math.floor(k / 2);
+  return arr.map((_, i) => {
+    const window = arr.slice(Math.max(0, i - half), Math.min(arr.length, i + half + 1));
+    const types = window.map(f => f.type);
+    // Majority vote
+    const counts = {};
+    types.forEach(t => { counts[t] = (counts[t] || 0) + 1; });
+    const majority = Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
+    return { ...arr[i], type: majority };
+  });
+}
+
+function framesToSegments(frames, hopDuration, minSegDuration = 0.25) {
+  if (!frames.length) return [];
+  const segs = [];
+  let cur = { type: frames[0].type, start: 0, hz: [frames[0].hz], end: hopDuration };
+
+  for (let i = 1; i < frames.length; i++) {
+    const t = i * hopDuration;
+    if (frames[i].type === cur.type) {
+      cur.end = t + hopDuration;
+      if (frames[i].hz > 0) cur.hz.push(frames[i].hz);
+    } else {
+      segs.push(cur);
+      cur = { type: frames[i].type, start: t, hz: frames[i].hz > 0 ? [frames[i].hz] : [], end: t + hopDuration };
+    }
+  }
+  segs.push(cur);
+
+  // Merge short unclear/silence gaps between same-type segments
+  const merged = [];
+  for (let i = 0; i < segs.length; i++) {
+    const s = segs[i];
+    s.avgHz = s.hz.length ? s.hz.reduce((a, b) => a + b, 0) / s.hz.length : 0;
+    delete s.hz;
+    if (s.end - s.start < minSegDuration && (s.type === 'silence' || s.type === 'unclear')) {
+      // Absorb into previous segment if possible
+      if (merged.length > 0) { merged[merged.length - 1].end = s.end; continue; }
+    }
+    merged.push(s);
+  }
+
+  return merged.filter(s => s.end - s.start >= minSegDuration);
+}
+
+// ─── Main analysis ────────────────────────────────────────
+btnAnalyze.addEventListener('click', async () => {
+  btnAnalyze.disabled = true;
+  const statusEl = document.getElementById('status');
+  const fillEl = document.getElementById('progress-fill');
+
+  try {
+    statusEl.textContent = 'Reading file...';
+    fillEl.style.width = '5%';
+
+    const file = fileInput.files[0];
+    const arrayBuffer = await file.arrayBuffer();
+
+    statusEl.textContent = 'Decoding audio...';
+    fillEl.style.width = '15%';
+
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const decoded = await ctx.decodeAudioData(arrayBuffer);
+    duration = decoded.duration;
+
+    statusEl.textContent = 'Downsampling to 8 kHz...';
+    fillEl.style.width = '25%';
+
+    const TARGET_RATE = 8000;
+    const targetLen = Math.ceil(decoded.duration * TARGET_RATE);
+    const offCtx = new OfflineAudioContext(1, targetLen, TARGET_RATE);
+    const src = offCtx.createBufferSource();
+    src.buffer = decoded;
+    src.connect(offCtx.destination);
+    src.start();
+    const mono = await offCtx.startRendering();
+    const samples = mono.getChannelData(0);
+    await ctx.close();
+
+    statusEl.textContent = 'Analysing pitch...';
+    const FRAME = 512;
+    const HOP   = 128;
+    const totalFrames = Math.floor((samples.length - FRAME) / HOP);
+    const rawFrames = [];
+
+    // Process in chunks to keep UI responsive
+    const CHUNK = 200;
+    for (let fi = 0; fi < totalFrames; fi += CHUNK) {
+      const end = Math.min(fi + CHUNK, totalFrames);
+      for (let f = fi; f < end; f++) {
+        const slice = samples.slice(f * HOP, f * HOP + FRAME);
+        rawFrames.push(analyzeFrame(slice, TARGET_RATE));
+      }
+      const pct = 25 + Math.round(((fi + CHUNK) / totalFrames) * 60);
+      fillEl.style.width = Math.min(pct, 85) + '%';
+      statusEl.textContent = `Analysing… ${Math.min(fi + CHUNK, totalFrames)} / ${totalFrames} frames`;
+      await new Promise(r => setTimeout(r, 0)); // yield to UI
+    }
+
+    statusEl.textContent = 'Smoothing results...';
+    fillEl.style.width = '90%';
+    const smoothed = medianFilter(rawFrames, 7);
+    segments = framesToSegments(smoothed, HOP / TARGET_RATE);
+    muteRegions = segments.filter(s => s.type === 'female').map(s => ({ start: +s.start.toFixed(3), end: +s.end.toFixed(3) }));
+
+    fillEl.style.width = '100%';
+    statusEl.textContent = `Done. Found ${muteRegions.length} female segment(s) totalling ${muteRegions.reduce((s, r) => s + r.end - r.start, 0).toFixed(1)}s.`;
+
+    renderResults();
+  } catch (err) {
+    statusEl.textContent = 'Error: ' + err.message;
+    console.error(err);
+  } finally {
+    btnAnalyze.disabled = false;
+  }
+});
+
+// ─── Render results ───────────────────────────────────────
+function renderResults() {
+  document.getElementById('results-section').hidden = false;
+
+  // Timeline canvas
+  const canvas = document.getElementById('timeline-canvas');
+  canvas.width = canvas.offsetWidth * devicePixelRatio;
+  canvas.height = 44 * devicePixelRatio;
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+
+  const COLOR = { male: '#4a90d9', female: '#f48fb1', silence: '#2a2a2a', unclear: '#333' };
+  segments.forEach(s => {
+    const x = (s.start / duration) * W;
+    const w = Math.max(1, ((s.end - s.start) / duration) * W);
+    ctx.fillStyle = COLOR[s.type] || '#333';
+    ctx.fillRect(x, 0, w, H);
+  });
+
+  // Playhead
+  function drawPlayhead() {
+    ctx.clearRect(0, 0, W, H);
+    segments.forEach(s => {
+      const x = (s.start / duration) * W;
+      const w = Math.max(1, ((s.end - s.start) / duration) * W);
+      ctx.fillStyle = COLOR[s.type] || '#333';
+      ctx.fillRect(x, 0, w, H);
+    });
+    const ph = (videoEl.currentTime / duration) * W;
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(ph - 1, 0, 2, H);
+    requestAnimationFrame(drawPlayhead);
+  }
+  drawPlayhead();
+
+  // Click to seek
+  canvas.addEventListener('click', e => {
+    const rect = canvas.getBoundingClientRect();
+    const ratio = (e.clientX - rect.left) / rect.width;
+    videoEl.currentTime = ratio * duration;
+  });
+
+  // Segment table
+  const tbody = document.getElementById('seg-tbody');
+  tbody.innerHTML = '';
+  segments.forEach(s => {
+    const tr = document.createElement('tr');
+    tr.className = s.type;
+    tr.innerHTML = `<td>${fmt(s.start)}</td><td>${fmt(s.end)}</td><td>${fmt(s.end - s.start)}</td><td>${s.type}</td><td>${s.avgHz > 0 ? s.avgHz.toFixed(0) + ' Hz' : '—'}</td>`;
+    tbody.appendChild(tr);
+  });
+
+  // JSON
+  const jsonData = { videoDuration: +duration.toFixed(3), muteRegions };
+  document.getElementById('json-out').textContent = JSON.stringify(jsonData, null, 2);
+}
+
+function fmt(s) {
+  const m = Math.floor(s / 60), sec = (s % 60).toFixed(2);
+  return `${String(m).padStart(2,'0')}:${String(sec).padStart(5,'0')}`;
+}
+
+// ─── Playback with muting ─────────────────────────────────
+function setupAudioRouting() {
+  teardownAudioRouting();
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  mediaSource = audioCtx.createMediaElementSource(videoEl);
+  gainNode = audioCtx.createGain();
+  mediaSource.connect(gainNode);
+  gainNode.connect(audioCtx.destination);
+}
+
+function teardownAudioRouting() {
+  if (mediaSource) { try { mediaSource.disconnect(); } catch {} mediaSource = null; }
+  if (gainNode) { try { gainNode.disconnect(); } catch {} gainNode = null; }
+  if (audioCtx) { audioCtx.close().catch(() => {}); audioCtx = null; }
+  mutedMode = false;
+}
+
+function inMuteRegion(t) {
+  return muteRegions.some(r => t >= r.start && t <= r.end);
+}
+
+videoEl.addEventListener('timeupdate', () => {
+  if (!mutedMode || !gainNode) return;
+  const target = inMuteRegion(videoEl.currentTime) ? 0 : 1;
+  gainNode.gain.setTargetAtTime(target, audioCtx.currentTime, 0.03);
+});
+
+document.getElementById('btn-normal').addEventListener('click', async () => {
+  setupAudioRouting();
+  mutedMode = false;
+  gainNode.gain.value = 1;
+  await audioCtx.resume();
+  videoEl.currentTime = 0;
+  videoEl.play();
+});
+
+document.getElementById('btn-muted').addEventListener('click', async () => {
+  setupAudioRouting();
+  mutedMode = true;
+  await audioCtx.resume();
+  videoEl.currentTime = 0;
+  videoEl.play();
+});
+
+document.getElementById('btn-stop').addEventListener('click', () => {
+  videoEl.pause();
+  videoEl.currentTime = 0;
+  teardownAudioRouting();
+});
+
+// ─── Export ───────────────────────────────────────────────
+document.getElementById('btn-copy').addEventListener('click', () => {
+  navigator.clipboard.writeText(document.getElementById('json-out').textContent)
+    .then(() => { document.getElementById('btn-copy').textContent = 'Copied!'; setTimeout(() => document.getElementById('btn-copy').textContent = 'Copy JSON', 2000); });
+});
+
+document.getElementById('btn-download-json').addEventListener('click', () => {
+  const blob = new Blob([document.getElementById('json-out').textContent], { type: 'application/json' });
+  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: 'mute-regions.json' });
+  a.click();
+});
+</script>
+</body>
+</html>

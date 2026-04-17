@@ -10,7 +10,8 @@ const state = {
   username: null,
   sourceFolderId: null,
   outputFolderId: null,
-  videos: [],
+  allVideos: [],
+  completedSet: new Set(),
   currentIndex: 0,
   currentVideoBlob: null,
   currentVideoUrl: null,
@@ -231,7 +232,7 @@ async function mergeVideos(sourceBlob, webcamBlob, onProgress) {
   const ffmpeg = state.ffmpeg;
   const { fetchFile } = await import('https://unpkg.com/@ffmpeg/util@0.12.1/dist/esm/index.js');
 
-  const sourceName = state.videos[state.currentIndex]?.name || 'video.mp4';
+  const sourceName = state.allVideos[state.currentIndex]?.name || 'video.mp4';
   const sourceExt = sourceName.includes('.') ? sourceName.split('.').pop() : 'mp4';
   const webcamExt = state.webcamMime.includes('mp4') ? 'mp4' : 'webm';
 
@@ -585,7 +586,7 @@ async function processAndUpload() {
     pctEl.textContent = Math.round(pct) + '%';
   }
 
-  const sourceVideo = state.videos[state.currentIndex];
+  const sourceVideo = state.allVideos[state.currentIndex];
 
   try {
     titleEl.textContent = 'Loading FFmpeg...';
@@ -617,7 +618,8 @@ async function processAndUpload() {
     const rawName = `raw_${state.username}_${baseName}.${webcamExt}`;
     await uploadToDrive(state.webcamBlob, rawName, state.outputFolderId, p => setProgress(p * 100), state.webcamMime.split(';')[0]);
 
-    // Save progress (fire and forget — non-fatal if it fails)
+    // Update local state + save to Drive (fire and forget)
+    state.completedSet.add(sourceVideo.id);
     fetch('/api/progress', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${state.sessionToken}` },
@@ -660,16 +662,14 @@ async function loadVideoList() {
     }
 
     const { completed } = await progressRes.json();
-    const completedSet = new Set(completed);
-    state.videos = sourceVideos.filter(v => !completedSet.has(v.id));
-    state.currentIndex = 0;
+    state.allVideos = sourceVideos;
+    state.completedSet = new Set(completed);
 
     if (sourceVideos.length === 0) {
       goTo('screen-empty');
-    } else if (state.videos.length === 0) {
-      goTo('screen-complete');
     } else {
-      await loadCurrentVideo();
+      renderVideoList();
+      goTo('screen-select');
     }
   } catch (err) {
     if (err.message.includes('Not configured')) {
@@ -681,10 +681,47 @@ async function loadVideoList() {
   }
 }
 
-async function loadCurrentVideo() {
-  const video = state.videos[state.currentIndex];
-  if (!video) { goTo('screen-complete'); return; }
+function renderVideoList() {
+  const list = $('video-list');
+  const remaining = state.allVideos.filter(v => !state.completedSet.has(v.id));
+  $('select-remaining').textContent = remaining.length;
+  $('select-total').textContent = state.allVideos.length;
 
+  list.innerHTML = '';
+  state.allVideos.forEach((video, index) => {
+    const done = state.completedSet.has(video.id);
+    const card = document.createElement('button');
+    card.className = `video-card${done ? ' completed' : ''}`;
+
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'video-card-name';
+    nameSpan.textContent = video.name;
+
+    const statusSpan = document.createElement('span');
+    statusSpan.className = 'video-card-status';
+    statusSpan.style.color = done ? '#43a047' : '#4fc3f7';
+    statusSpan.textContent = done ? 'Done' : 'Record \u2192';
+
+    card.appendChild(nameSpan);
+    card.appendChild(statusSpan);
+    if (!done) card.addEventListener('click', () => selectVideo(index));
+    list.appendChild(card);
+  });
+}
+
+let loadingVideo = false;
+
+function selectVideo(index) {
+  if (loadingVideo) return;
+  state.currentIndex = index;
+  loadCurrentVideo();
+}
+
+async function loadCurrentVideo() {
+  const video = state.allVideos[state.currentIndex];
+  if (!video) { goTo('screen-select'); return; }
+
+  loadingVideo = true;
   goTo('screen-loading');
   $('loading-status').textContent = `Downloading: ${video.name}`;
   $('loading-progress').hidden = false;
@@ -701,8 +738,6 @@ async function loadCurrentVideo() {
     prerecordedVideo.src = state.currentVideoUrl;
     prerecordedVideo.load();
 
-    $('current-num').textContent = state.currentIndex + 1;
-    $('total-num').textContent = state.videos.length;
     $('current-name').textContent = video.name;
     recTimer.textContent = '00:00';
     recTimer.hidden = true;
@@ -711,37 +746,42 @@ async function loadCurrentVideo() {
     $('loading-bar').style.width = '0%';
   } catch (err) {
     $('loading-progress').hidden = true;
+    loadingVideo = false;
     alert('Failed to download video: ' + err.message);
-    goTo('screen-empty');
+    goTo('screen-select');
     return;
   }
 
   try {
     await initCamera();
   } catch (err) {
+    loadingVideo = false;
     alert('Camera access denied. Please allow camera and microphone access and reload the page.');
-    goTo('screen-empty');
+    goTo('screen-select');
     return;
   }
 
+  loadingVideo = false;
   goTo('screen-record');
 }
 
-$('btn-skip').addEventListener('click', () => {
+$('btn-back').addEventListener('click', () => {
   if (isRecording) {
     if (mediaRecorder) mediaRecorder.onstop = null;
     stopRecording();
   }
   stopCamera();
-  state.currentIndex++;
-  if (state.currentIndex >= state.videos.length) goTo('screen-complete');
-  else loadCurrentVideo();
+  goTo('screen-select');
 });
 
 $('btn-next').addEventListener('click', () => {
-  state.currentIndex++;
-  if (state.currentIndex >= state.videos.length) goTo('screen-complete');
-  else loadCurrentVideo();
+  const remaining = state.allVideos.filter(v => !state.completedSet.has(v.id));
+  if (remaining.length === 0) {
+    goTo('screen-complete');
+  } else {
+    renderVideoList();
+    goTo('screen-select');
+  }
 });
 
 $('btn-refresh').addEventListener('click', () => loadVideoList());
@@ -784,6 +824,10 @@ $('btn-login').addEventListener('click', async () => {
     btn.disabled = false;
     btn.textContent = 'Sign In';
   }
+});
+
+$('login-username').addEventListener('keydown', e => {
+  if (e.key === 'Enter') $('login-password').focus();
 });
 
 $('login-password').addEventListener('keydown', e => {
