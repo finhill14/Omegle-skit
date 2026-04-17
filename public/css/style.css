@@ -252,12 +252,39 @@ p strong {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  position: relative;
   /* Height-driven so controls never go off screen */
   height: calc(100svh - 175px);
   aspect-ratio: 9 / 16;
   width: auto;
   max-width: 100%;
   margin: 0 auto 0.75rem;
+}
+
+.countdown-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 10;
+  border-radius: 4px;
+}
+
+.countdown-number {
+  font-size: 7rem;
+  font-weight: 900;
+  color: #fff;
+  text-shadow: 0 4px 24px rgba(0, 0, 0, 0.6);
+  animation: countdown-pop 1s ease-out forwards;
+}
+
+@keyframes countdown-pop {
+  0%   { transform: scale(1.6); opacity: 0; }
+  15%  { transform: scale(1);   opacity: 1; }
+  75%  { transform: scale(1);   opacity: 1; }
+  100% { transform: scale(0.8); opacity: 0; }
 }
 
 /* Top (their video) — 40% of height, cropped to fill */

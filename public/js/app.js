@@ -391,9 +391,45 @@ function stopRecording() {
   clearInterval(timerInterval);
 }
 
-btnRecord.addEventListener('click', () => {
-  if (!isRecording) startRecording();
-  else stopRecording();
+function countdown() {
+  return new Promise(resolve => {
+    const overlay = $('countdown-overlay');
+    const numEl = $('countdown-num');
+    let count = 3;
+
+    function show(n) {
+      numEl.textContent = n;
+      // Reset animation by forcing reflow
+      numEl.style.animation = 'none';
+      void numEl.offsetWidth;
+      numEl.style.animation = '';
+    }
+
+    overlay.hidden = false;
+    show(count);
+
+    const iv = setInterval(() => {
+      count--;
+      if (count <= 0) {
+        clearInterval(iv);
+        overlay.hidden = true;
+        resolve();
+        return;
+      }
+      show(count);
+    }, 1000);
+  });
+}
+
+btnRecord.addEventListener('click', async () => {
+  if (!isRecording) {
+    btnRecord.disabled = true;
+    await countdown();
+    btnRecord.disabled = false;
+    startRecording();
+  } else {
+    stopRecording();
+  }
 });
 
 // ─── Preview ─────────────────────────────────────────────
@@ -403,11 +439,34 @@ const btnPlayPreview = $('btn-play-preview');
 let syncInterval = null;
 
 function initPreview() {
+  btnPlayPreview.disabled = true;
+  btnPlayPreview.textContent = 'Loading...';
+
   previewTop.src = state.currentVideoUrl;
   previewBottom.src = state.webcamUrl;
+
+  let ready = 0;
+  const onReady = () => {
+    ready++;
+    if (ready >= 2) {
+      btnPlayPreview.disabled = false;
+      btnPlayPreview.textContent = 'Play Preview';
+    }
+  };
+
+  previewTop.addEventListener('loadedmetadata', onReady, { once: true });
+  previewBottom.addEventListener('loadedmetadata', onReady, { once: true });
+
+  // Fallback: enable after 4s regardless
+  setTimeout(() => {
+    if (btnPlayPreview.disabled) {
+      btnPlayPreview.disabled = false;
+      btnPlayPreview.textContent = 'Play Preview';
+    }
+  }, 4000);
+
   previewTop.load();
   previewBottom.load();
-  btnPlayPreview.textContent = 'Play Preview';
   clearSync();
 }
 
@@ -419,6 +478,7 @@ btnPlayPreview.addEventListener('click', () => {
   if (previewTop.paused) {
     previewTop.currentTime = 0;
     previewBottom.currentTime = 0;
+    // Both play() calls must be synchronous to keep iOS user-gesture context
     previewTop.play().catch(() => {});
     previewBottom.play().catch(() => {});
     btnPlayPreview.textContent = 'Pause';

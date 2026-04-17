@@ -76,6 +76,9 @@
           <video id="webcam-preview" playsinline autoplay muted></video>
           <span class="video-label">You</span>
         </div>
+        <div id="countdown-overlay" class="countdown-overlay" hidden>
+          <span id="countdown-num" class="countdown-number"></span>
+        </div>
       </div>
       <div class="controls">
         <button id="btn-record" class="btn btn-record">Start Recording</button>
@@ -90,10 +93,10 @@
       <h2>Preview Your Skit</h2>
       <div class="preview-container">
         <div class="video-half video-top">
-          <video id="preview-top" playsinline></video>
+          <video id="preview-top" playsinline preload="auto"></video>
         </div>
         <div class="video-half video-bottom">
-          <video id="preview-bottom" playsinline></video>
+          <video id="preview-bottom" playsinline preload="auto"></video>
         </div>
       </div>
       <div class="controls">
