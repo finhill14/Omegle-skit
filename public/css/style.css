@@ -267,16 +267,19 @@ p strong {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.45);
+  background: transparent;
   z-index: 10;
-  border-radius: 4px;
+  pointer-events: none;
 }
 
 .countdown-number {
-  font-size: 7rem;
+  font-size: 8rem;
   font-weight: 900;
   color: #fff;
-  text-shadow: 0 4px 24px rgba(0, 0, 0, 0.6);
+  -webkit-text-stroke: 2px rgba(0, 0, 0, 0.4);
+  text-shadow:
+    0 0 20px rgba(0, 0, 0, 0.9),
+    0 0 60px rgba(0, 0, 0, 0.6);
   animation: countdown-pop 1s ease-out forwards;
 }
 
