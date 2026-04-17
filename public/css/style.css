@@ -252,9 +252,12 @@ p strong {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  margin-bottom: 0.75rem;
+  /* Height-driven so controls never go off screen */
+  height: calc(100svh - 175px);
   aspect-ratio: 9 / 16;
-  width: 100%;
+  width: auto;
+  max-width: 100%;
+  margin: 0 auto 0.75rem;
 }
 
 /* Top (their video) — 40% of height, cropped to fill */
@@ -294,6 +297,7 @@ p strong {
 
 #webcam-preview {
   transform: scaleX(-1);
+  object-fit: contain; /* show full face — no zoom crop in preview */
 }
 
 /* ── Controls ─────────────────────────────────── */
