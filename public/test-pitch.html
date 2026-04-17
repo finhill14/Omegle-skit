@@ -66,7 +66,7 @@
   <h2>2 — Analyse audio</h2>
   <div class="row">
     <button class="btn btn-primary" id="btn-analyze" disabled>Analyse</button>
-    <label>Downsample to 8 kHz, autocorrelation pitch per 64 ms frame</label>
+    <label>Learns the guy's voice from first 3s, then uses adaptive thresholds</label>
   </div>
   <div id="status">Load a video to begin.</div>
   <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
@@ -144,13 +144,11 @@ fileInput.addEventListener('change', () => {
 function analyzeFrame(samples, sampleRate) {
   const n = samples.length;
 
-  // RMS silence check
   let rms = 0;
   for (let i = 0; i < n; i++) rms += samples[i] * samples[i];
   rms = Math.sqrt(rms / n);
   if (rms < 0.008) return { type: 'silence', hz: 0 };
 
-  // Autocorrelation over voice range 60–600 Hz
   const minLag = Math.floor(sampleRate / 600);
   const maxLag = Math.min(Math.ceil(sampleRate / 60), n - 1);
 
@@ -166,13 +164,10 @@ function analyzeFrame(samples, sampleRate) {
     if (norm > bestNorm) { bestNorm = norm; bestLag = lag; }
   }
 
-  // Confidence threshold — below this it's noisy/music/unclear
   if (bestNorm < 0.42 || bestLag < 0) return { type: rms > 0.05 ? 'unclear' : 'silence', hz: 0 };
 
   const hz = sampleRate / bestLag;
-  // Female fundamental: 165–350 Hz  |  Male: 85–165 Hz  |  overlap zone → unclear
-  const type = hz > 170 ? 'female' : hz < 150 ? 'male' : 'unclear';
-  return { type, hz, confidence: bestNorm };
+  return { type: 'voiced', hz, confidence: bestNorm };
 }
 
 function medianFilter(arr, k) {
@@ -247,16 +242,15 @@ function teardownAudio() {
 }
 
 // ─── Main analysis ────────────────────────────────────────
-// Uses createMediaElementSource so the browser decodes the video natively
-// (avoids decodeAudioData failures on some MP4 codecs).
-// The video plays at 1× speed while audio is captured via ScriptProcessor.
+// Uses createMediaElementSource so the browser decodes the video natively.
+// After capturing audio, it learns the primary speaker's pitch from the
+// first 3 seconds, then uses adaptive thresholds instead of fixed ones.
 btnAnalyze.addEventListener('click', async () => {
   btnAnalyze.disabled = true;
   const statusEl = document.getElementById('status');
   const fillEl = document.getElementById('progress-fill');
 
   try {
-    // Stop any current playback and reset processor
     videoEl.pause();
     if (processor) { processor.disconnect(); processor = null; }
     if (gainNode)  { gainNode.disconnect();  gainNode  = null; }
@@ -267,17 +261,16 @@ btnAnalyze.addEventListener('click', async () => {
     const ctx = ensureCtx();
     await ctx.resume();
     const source = ensureSource();
-    source.disconnect(); // clear any previous routing
+    source.disconnect();
 
-    // Downsample from native SR (~44100 Hz) to ~8000 Hz by taking every DS-th sample
     const NATIVE_SR = ctx.sampleRate;
     const DS = Math.max(1, Math.round(NATIVE_SR / 8000));
-    const EFFECTIVE_SR = NATIVE_SR / DS; // ≈ 8000 Hz
+    const EFFECTIVE_SR = NATIVE_SR / DS;
 
     let collected = [];
     processor = ctx.createScriptProcessor(4096, 1, 1);
     const silentGain = ctx.createGain();
-    silentGain.gain.value = 0; // silent during capture — we're just collecting samples
+    silentGain.gain.value = 0;
 
     source.connect(processor);
     processor.connect(silentGain);
@@ -287,13 +280,12 @@ btnAnalyze.addEventListener('click', async () => {
       const ch = e.inputBuffer.getChannelData(0);
       for (let i = 0; i < ch.length; i += DS) collected.push(ch[i]);
       if (duration > 0) {
-        const pct = 3 + (videoEl.currentTime / duration) * 72;
-        fillEl.style.width = Math.min(pct, 75) + '%';
+        const pct = 3 + (videoEl.currentTime / duration) * 62;
+        fillEl.style.width = Math.min(pct, 65) + '%';
         statusEl.textContent = `Capturing audio… ${videoEl.currentTime.toFixed(1)}s / ${duration.toFixed(1)}s`;
       }
     };
 
-    // Ensure metadata is loaded so we have duration
     if (!videoEl.duration || isNaN(videoEl.duration)) {
       await new Promise(res => videoEl.addEventListener('loadedmetadata', res, { once: true }));
     }
@@ -301,7 +293,7 @@ btnAnalyze.addEventListener('click', async () => {
     videoEl.currentTime = 0;
     videoEl.playbackRate = 1;
 
-    statusEl.textContent = `Capturing audio (plays at normal speed, ${duration.toFixed(0)}s)…`;
+    statusEl.textContent = `Capturing audio (${duration.toFixed(0)}s at normal speed)…`;
 
     await new Promise((resolve, reject) => {
       videoEl.addEventListener('ended', resolve, { once: true });
@@ -309,12 +301,11 @@ btnAnalyze.addEventListener('click', async () => {
       videoEl.play().catch(reject);
     });
 
-    // Disconnect capture chain — keep source alive for playback
     source.disconnect();
     if (processor) { processor.disconnect(); processor = null; }
 
     statusEl.textContent = 'Analysing pitch...';
-    fillEl.style.width = '78%';
+    fillEl.style.width = '68%';
 
     const samples = new Float32Array(collected);
     collected = null;
@@ -330,15 +321,57 @@ btnAnalyze.addEventListener('click', async () => {
       for (let f = fi; f < end; f++) {
         rawFrames.push(analyzeFrame(samples.slice(f * HOP, f * HOP + FRAME), EFFECTIVE_SR));
       }
-      const pct = 78 + Math.round(((fi + CHUNK) / totalFrames) * 18);
-      fillEl.style.width = Math.min(pct, 96) + '%';
+      const pct = 68 + Math.round(((fi + CHUNK) / totalFrames) * 18);
+      fillEl.style.width = Math.min(pct, 86) + '%';
       statusEl.textContent = `Analysing… frame ${Math.min(fi + CHUNK, totalFrames)} / ${totalFrames}`;
       await new Promise(r => setTimeout(r, 0));
     }
 
-    statusEl.textContent = 'Smoothing results...';
-    const smoothed = medianFilter(rawFrames, 7);
+    // ── Reference calibration ──────────────────────────────
+    // Learn the primary speaker's voice from the first 3 seconds.
+    // Uses median + IQR (robust to outliers if a second speaker appears early).
+    statusEl.textContent = 'Calibrating voice reference...';
+    fillEl.style.width = '88%';
+
     const hopDur = HOP / EFFECTIVE_SR;
+    const CALIBRATION_SECS = 3;
+    const calibFrameCount = Math.ceil(CALIBRATION_SECS / hopDur);
+    const refPitches = [];
+
+    for (let i = 0; i < Math.min(calibFrameCount, rawFrames.length); i++) {
+      if (rawFrames[i].hz > 60) refPitches.push(rawFrames[i].hz);
+    }
+
+    let calibInfo;
+    if (refPitches.length >= 5) {
+      const sorted = [...refPitches].sort((a, b) => a - b);
+      const refMedian = sorted[Math.floor(sorted.length / 2)];
+      const q1 = sorted[Math.floor(sorted.length * 0.25)];
+      const q3 = sorted[Math.floor(sorted.length * 0.75)];
+      const iqr = Math.max(q3 - q1, 15);
+
+      const maleUpper = Math.max(refMedian + 3 * iqr, Math.max(...refPitches) + 25);
+      const femaleLower = maleUpper + 20;
+
+      for (const f of rawFrames) {
+        if (f.hz <= 0) continue;
+        if (f.hz <= maleUpper) f.type = 'male';
+        else if (f.hz >= femaleLower) f.type = 'female';
+        else f.type = 'unclear';
+      }
+
+      calibInfo = `Reference voice: ${refMedian.toFixed(0)}Hz median (range ${sorted[0].toFixed(0)}–${sorted[sorted.length-1].toFixed(0)}Hz). Male ≤${maleUpper.toFixed(0)}Hz, female ≥${femaleLower.toFixed(0)}Hz.`;
+    } else {
+      for (const f of rawFrames) {
+        if (f.hz <= 0) continue;
+        f.type = f.hz > 170 ? 'female' : f.hz < 150 ? 'male' : 'unclear';
+      }
+      calibInfo = 'Not enough voice in first 3s — used fixed thresholds (male <150Hz, female >170Hz).';
+    }
+
+    statusEl.textContent = 'Smoothing results...';
+    fillEl.style.width = '93%';
+    const smoothed = medianFilter(rawFrames, 7);
     segments = framesToSegments(smoothed, hopDur);
     muteRegions = segments
       .filter(s => s.type === 'female')
@@ -346,9 +379,16 @@ btnAnalyze.addEventListener('click', async () => {
 
     fillEl.style.width = '100%';
     const totalFemale = muteRegions.reduce((a, r) => a + r.end - r.start, 0);
-    statusEl.textContent = `Done. ${muteRegions.length} female segment(s), ${totalFemale.toFixed(1)}s total.`;
+    statusEl.textContent = `${muteRegions.length} female segment(s), ${totalFemale.toFixed(1)}s total. ${calibInfo}`;
 
     renderResults();
+
+    // Restore audio routing so the video has sound for playback
+    const src = ensureSource();
+    gainNode = ctx.createGain();
+    gainNode.gain.value = 1;
+    src.connect(gainNode);
+    gainNode.connect(ctx.destination);
   } catch (err) {
     statusEl.textContent = 'Error: ' + err.message;
     console.error(err);
@@ -427,20 +467,27 @@ videoEl.addEventListener('timeupdate', () => {
   gainNode.gain.setTargetAtTime(target, audioCtx.currentTime, 0.03);
 });
 
+function ensurePlaybackRouting() {
+  if (!audioCtx || audioCtx.state === 'closed') return false;
+  if (!gainNode) {
+    const source = ensureSource();
+    source.disconnect();
+    gainNode = audioCtx.createGain();
+    gainNode.gain.value = 1;
+    source.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+  }
+  return true;
+}
+
 function startPlayback(muted) {
-  if (!audioCtx || audioCtx.state === 'closed') return; // need to analyse first
-  if (gainNode) { gainNode.disconnect(); gainNode = null; }
-  const source = ensureSource();
-  source.disconnect(); // clear any stale connections
-  gainNode = audioCtx.createGain();
-  gainNode.gain.value = 1;
-  source.connect(gainNode);
-  gainNode.connect(audioCtx.destination);
+  if (!ensurePlaybackRouting()) return;
   mutedMode = muted;
+  if (!muted) gainNode.gain.value = 1;
   audioCtx.resume().catch(() => {});
   videoEl.currentTime = 0;
   videoEl.playbackRate = 1;
-  videoEl.play().catch(() => {});
+  videoEl.play().catch(e => console.error('Play failed:', e));
 }
 
 document.getElementById('btn-normal').addEventListener('click', () => startPlayback(false));
@@ -449,8 +496,8 @@ document.getElementById('btn-muted').addEventListener('click', () => startPlayba
 document.getElementById('btn-stop').addEventListener('click', () => {
   videoEl.pause();
   videoEl.currentTime = 0;
-  if (gainNode) { gainNode.disconnect(); gainNode = null; }
   mutedMode = false;
+  if (gainNode) gainNode.gain.value = 1;
 });
 
 // ─── Export ───────────────────────────────────────────────
