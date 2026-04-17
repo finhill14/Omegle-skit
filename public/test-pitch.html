@@ -328,45 +328,49 @@ btnAnalyze.addEventListener('click', async () => {
     }
 
     // ── Reference calibration ──────────────────────────────
-    // Learn the primary speaker's voice from the first 3 seconds.
-    // Uses median + IQR (robust to outliers if a second speaker appears early).
+    // Male voice in normal speech never exceeds ~200Hz, so pre-filter
+    // calibration pitches to < 200Hz. This excludes the female's voice
+    // even if she speaks in the first 3 seconds, preventing the
+    // thresholds from being pushed too high.
     statusEl.textContent = 'Calibrating voice reference...';
     fillEl.style.width = '88%';
 
     const hopDur = HOP / EFFECTIVE_SR;
     const CALIBRATION_SECS = 3;
     const calibFrameCount = Math.ceil(CALIBRATION_SECS / hopDur);
-    const refPitches = [];
 
+    // Only collect pitches below the physiological male ceiling
+    const maleCandidates = [];
     for (let i = 0; i < Math.min(calibFrameCount, rawFrames.length); i++) {
-      if (rawFrames[i].hz > 60) refPitches.push(rawFrames[i].hz);
+      if (rawFrames[i].hz > 60 && rawFrames[i].hz < 200) maleCandidates.push(rawFrames[i].hz);
     }
 
     let calibInfo;
-    if (refPitches.length >= 5) {
-      const sorted = [...refPitches].sort((a, b) => a - b);
+    if (maleCandidates.length >= 5) {
+      const sorted = [...maleCandidates].sort((a, b) => a - b);
+      // 90th percentile avoids occasional spikes while capturing his real upper range
+      const refP90   = sorted[Math.floor(sorted.length * 0.9)];
       const refMedian = sorted[Math.floor(sorted.length / 2)];
-      const q1 = sorted[Math.floor(sorted.length * 0.25)];
-      const q3 = sorted[Math.floor(sorted.length * 0.75)];
-      const iqr = Math.max(q3 - q1, 15);
 
-      const maleUpper = Math.max(refMedian + 3 * iqr, Math.max(...refPitches) + 25);
-      const femaleLower = maleUpper + 20;
+      // Male ceiling = 90th-percentile + 30Hz buffer, hard-capped at 240Hz
+      const maleUpper   = Math.min(refP90 + 30, 240);
+      const femaleLower = maleUpper + 35;
 
       for (const f of rawFrames) {
         if (f.hz <= 0) continue;
-        if (f.hz <= maleUpper) f.type = 'male';
+        if (f.hz <= maleUpper)        f.type = 'male';
         else if (f.hz >= femaleLower) f.type = 'female';
-        else f.type = 'unclear';
+        else                          f.type = 'unclear';
       }
 
-      calibInfo = `Reference voice: ${refMedian.toFixed(0)}Hz median (range ${sorted[0].toFixed(0)}–${sorted[sorted.length-1].toFixed(0)}Hz). Male ≤${maleUpper.toFixed(0)}Hz, female ≥${femaleLower.toFixed(0)}Hz.`;
+      calibInfo = `Ref: ${refMedian.toFixed(0)}Hz median, p90=${refP90.toFixed(0)}Hz. Male ≤${maleUpper.toFixed(0)}Hz, female ≥${femaleLower.toFixed(0)}Hz.`;
     } else {
+      // Fallback: generous fixed thresholds (male <200Hz so the guy isn't cut)
       for (const f of rawFrames) {
         if (f.hz <= 0) continue;
-        f.type = f.hz > 170 ? 'female' : f.hz < 150 ? 'male' : 'unclear';
+        f.type = f.hz > 235 ? 'female' : f.hz < 200 ? 'male' : 'unclear';
       }
-      calibInfo = 'Not enough voice in first 3s — used fixed thresholds (male <150Hz, female >170Hz).';
+      calibInfo = 'Not enough male voice in first 3s — fixed thresholds: male <200Hz, female >235Hz.';
     }
 
     statusEl.textContent = 'Smoothing results...';
