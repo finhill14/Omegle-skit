@@ -132,11 +132,20 @@ const fileInput = document.getElementById('file-input');
 const videoEl = document.getElementById('video-el');
 const btnAnalyze = document.getElementById('btn-analyze');
 
+let _videoObjectUrl = null;
+
 fileInput.addEventListener('change', () => {
   const file = fileInput.files[0];
   if (!file) return;
-  teardownAudio(); // reset all audio state when new file loaded
-  videoEl.src = URL.createObjectURL(file);
+  teardownAudio();
+  // Reset stale analysis state so a new file can't be uploaded with old mute regions
+  segments = []; muteRegions = []; duration = 0;
+  // Cancel any running timeline RAF before hiding results
+  if (_rafId !== null) { cancelAnimationFrame(_rafId); _rafId = null; }
+  // Revoke previous blob URL to avoid memory leak
+  if (_videoObjectUrl) { URL.revokeObjectURL(_videoObjectUrl); }
+  _videoObjectUrl = URL.createObjectURL(file);
+  videoEl.src = _videoObjectUrl;
   videoEl.load();
   btnAnalyze.disabled = false;
   document.getElementById('results-section').hidden = true;
@@ -434,17 +443,27 @@ btnAnalyze.addEventListener('click', async () => {
 });
 
 // ─── Render results ───────────────────────────────────────
+let _rafId = null;
+const canvas = document.getElementById('timeline-canvas');
+const cx = canvas.getContext('2d');
+const COLOR = { male: '#4a90d9', female: '#f48fb1', silence: '#2a2a2a', unclear: '#333' };
+
+// Single persistent click listener — no accumulation across rerenders
+canvas.addEventListener('click', e => {
+  if (!duration) return;
+  const rect = canvas.getBoundingClientRect();
+  videoEl.currentTime = ((e.clientX - rect.left) / rect.width) * duration;
+});
+
 function renderResults() {
   document.getElementById('results-section').hidden = false;
 
-  // Timeline canvas
-  const canvas = document.getElementById('timeline-canvas');
-  canvas.width = canvas.offsetWidth * devicePixelRatio;
-  canvas.height = 44 * devicePixelRatio;
-  const cx = canvas.getContext('2d');
-  const W = canvas.width, H = canvas.height;
+  // Cancel any previous RAF loop before starting a new one
+  if (_rafId !== null) { cancelAnimationFrame(_rafId); _rafId = null; }
 
-  const COLOR = { male: '#4a90d9', female: '#f48fb1', silence: '#2a2a2a', unclear: '#333' };
+  canvas.width  = canvas.offsetWidth * devicePixelRatio;
+  canvas.height = 44 * devicePixelRatio;
+  const W = canvas.width, H = canvas.height;
 
   function drawTimeline() {
     cx.clearRect(0, 0, W, H);
@@ -459,16 +478,9 @@ function renderResults() {
       cx.fillStyle = '#fff';
       cx.fillRect(ph - 1, 0, 2, H);
     }
-    requestAnimationFrame(drawTimeline);
+    _rafId = requestAnimationFrame(drawTimeline);
   }
   drawTimeline();
-
-  // Click to seek
-  canvas.addEventListener('click', e => {
-    const rect = canvas.getBoundingClientRect();
-    const ratio = (e.clientX - rect.left) / rect.width;
-    videoEl.currentTime = ratio * duration;
-  });
 
   // Segment table
   const tbody = document.getElementById('seg-tbody');
@@ -566,19 +578,26 @@ document.getElementById('btn-stop').addEventListener('click', () => {
   videoEl.pause();
   videoEl.currentTime = 0;
   mutedMode = false;
-  if (gainNode) gainNode.gain.value = 1;
+  if (gainNode && audioCtx) {
+    gainNode.gain.cancelScheduledValues(audioCtx.currentTime);
+    gainNode.gain.setValueAtTime(1, audioCtx.currentTime);
+  }
 });
 
 // ─── Export ───────────────────────────────────────────────
 document.getElementById('btn-copy').addEventListener('click', () => {
+  const btn = document.getElementById('btn-copy');
   navigator.clipboard.writeText(document.getElementById('json-out').textContent)
-    .then(() => { document.getElementById('btn-copy').textContent = 'Copied!'; setTimeout(() => document.getElementById('btn-copy').textContent = 'Copy JSON', 2000); });
+    .then(() => { btn.textContent = 'Copied!'; setTimeout(() => btn.textContent = 'Copy JSON', 2000); })
+    .catch(() => { btn.textContent = 'Copy failed'; setTimeout(() => btn.textContent = 'Copy JSON', 2000); });
 });
 
 document.getElementById('btn-download-json').addEventListener('click', () => {
   const blob = new Blob([document.getElementById('json-out').textContent], { type: 'application/json' });
-  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: 'mute-regions.json' });
+  const url = URL.createObjectURL(blob);
+  const a = Object.assign(document.createElement('a'), { href: url, download: 'mute-regions.json' });
   a.click();
+  URL.revokeObjectURL(url);
 });
 
 // ─── Drive helpers ────────────────────────────────────────
@@ -591,6 +610,7 @@ async function getDriveToken() {
   const res = await fetch('/api/auth/refresh');
   if (!res.ok) throw new Error('Drive not configured — run /api/auth/google first');
   const data = await res.json();
+  if (!data.access_token) throw new Error('Drive auth failed: no access token in response');
   _driveToken = data.access_token;
   _driveTokenExpiry = Date.now() + ((data.expires_in || 3600) - 60) * 1000;
   return _driveToken;
@@ -603,6 +623,7 @@ async function findOrCreateDriveFolder(name) {
     `${DRIVE_API}/files?q=${encodeURIComponent(q)}&fields=files(id)&spaces=drive&supportsAllDrives=true&includeItemsFromAllDrives=true`,
     { headers: { Authorization: `Bearer ${token}` } }
   );
+  if (!search.ok) throw new Error(`Drive folder search failed: ${search.status}`);
   const data = await search.json();
   if (data.files && data.files.length) return data.files[0].id;
   const create = await fetch(`${DRIVE_API}/files?supportsAllDrives=true`, {
@@ -634,7 +655,13 @@ async function uploadBlob(blob, name, folderId, mimeType, onProgress) {
     xhr.open('PUT', uploadUrl);
     xhr.setRequestHeader('Content-Type', mimeType);
     xhr.upload.onprogress = e => { if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total); };
-    xhr.onload = () => xhr.status >= 200 && xhr.status < 300 ? resolve(JSON.parse(xhr.responseText)) : reject(new Error(`Upload failed: ${xhr.status}`));
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try { resolve(JSON.parse(xhr.responseText)); } catch { resolve({ name }); }
+      } else {
+        reject(new Error(`Upload failed: ${xhr.status}`));
+      }
+    };
     xhr.onerror = () => reject(new Error('Upload network error'));
     xhr.send(blob);
   });
@@ -698,7 +725,15 @@ document.getElementById('btn-upload').addEventListener('click', async () => {
         statusEl.textContent = `Processing audio… ${Math.round(progress * 100)}%`;
       });
 
-      await ffmpeg.exec(['-i', inputName, '-af', filter, '-c:v', 'copy', outputName]);
+      // -c:v copy only works when the input video codec is MP4-compatible (H264/H265).
+      // For webm/vp9 and other formats, omit it and let FFmpeg re-encode.
+      const mp4CompatibleInput = ['mp4', 'm4v', 'mov'].includes(ext);
+      const ffArgs = ['-i', inputName, '-af', filter];
+      if (mp4CompatibleInput) ffArgs.push('-c:v', 'copy');
+      ffArgs.push(outputName);
+      // ffmpeg.exec() resolves with exit code rather than rejecting on failure
+      const exitCode = await ffmpeg.exec(ffArgs);
+      if (exitCode !== 0) throw new Error(`FFmpeg processing failed (exit code ${exitCode}). Try a different video format.`);
 
       const data = await ffmpeg.readFile(outputName);
       outputBlob = new Blob([data], { type: 'video/mp4' });
