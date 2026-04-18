@@ -132,13 +132,20 @@ const fileInput = document.getElementById('file-input');
 const videoEl = document.getElementById('video-el');
 const btnAnalyze = document.getElementById('btn-analyze');
 
+let _videoObjectUrl = null;
+
 fileInput.addEventListener('change', () => {
   const file = fileInput.files[0];
   if (!file) return;
   teardownAudio();
   // Reset stale analysis state so a new file can't be uploaded with old mute regions
   segments = []; muteRegions = []; duration = 0;
-  videoEl.src = URL.createObjectURL(file);
+  // Cancel any running timeline RAF before hiding results
+  if (_rafId !== null) { cancelAnimationFrame(_rafId); _rafId = null; }
+  // Revoke previous blob URL to avoid memory leak
+  if (_videoObjectUrl) { URL.revokeObjectURL(_videoObjectUrl); }
+  _videoObjectUrl = URL.createObjectURL(file);
+  videoEl.src = _videoObjectUrl;
   videoEl.load();
   btnAnalyze.disabled = false;
   document.getElementById('results-section').hidden = true;
@@ -724,7 +731,9 @@ document.getElementById('btn-upload').addEventListener('click', async () => {
       const ffArgs = ['-i', inputName, '-af', filter];
       if (mp4CompatibleInput) ffArgs.push('-c:v', 'copy');
       ffArgs.push(outputName);
-      await ffmpeg.exec(ffArgs);
+      // ffmpeg.exec() resolves with exit code rather than rejecting on failure
+      const exitCode = await ffmpeg.exec(ffArgs);
+      if (exitCode !== 0) throw new Error(`FFmpeg processing failed (exit code ${exitCode}). Try a different video format.`);
 
       const data = await ffmpeg.readFile(outputName);
       outputBlob = new Blob([data], { type: 'video/mp4' });
