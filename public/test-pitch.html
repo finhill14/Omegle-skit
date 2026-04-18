@@ -52,7 +52,7 @@
 <body>
 
 <h1>Pitch Detection Test</h1>
-<p class="subtitle">Test female-voice detection on source videos before enabling it in the app. No data leaves your browser.</p>
+<p class="subtitle">Test female-voice detection on source videos. Detection runs entirely in your browser; uploading to Drive is optional.</p>
 
 <section>
   <h2>1 — Load a source video</h2>
@@ -187,8 +187,8 @@ function medianFilter(arr, k) {
   // Median over a window of k frames for smoothing jitter
   const half = Math.floor(k / 2);
   return arr.map((_, i) => {
-    const window = arr.slice(Math.max(0, i - half), Math.min(arr.length, i + half + 1));
-    const types = window.map(f => f.type);
+    const win = arr.slice(Math.max(0, i - half), Math.min(arr.length, i + half + 1));
+    const types = win.map(f => f.type);
     // Majority vote
     const counts = {};
     types.forEach(t => { counts[t] = (counts[t] || 0) + 1; });
@@ -759,6 +759,8 @@ document.getElementById('btn-upload').addEventListener('click', async () => {
 
   } catch (err) {
     statusEl.textContent = 'Error: ' + err.message;
+    fillEl.style.width = '0%';
+    barEl.style.display = 'none';
     console.error(err);
   } finally {
     btn.disabled = false;
