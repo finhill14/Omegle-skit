@@ -107,9 +107,13 @@
     <button class="btn" id="btn-download-json">Download JSON</button>
   </div>
 
-  <div class="note" style="margin-top:1rem">
-    <strong>Next step:</strong> If accuracy looks good on your videos, let me know and I'll wire this into the main app — it'll run automatically on each source video and cache the results in Drive.
+  <h2 style="margin-top:1rem">7 — Process &amp; Upload to Drive</h2>
+  <p style="color:#666;font-size:0.8rem;margin-bottom:0.75rem">Happy with the detection? This will silence the female parts in the audio using FFmpeg, then upload the processed video to the <strong style="color:#aaa">Omegle Source</strong> folder in Drive.</p>
+  <div class="row">
+    <button class="btn btn-primary" id="btn-upload">Process &amp; Upload to Drive</button>
+    <span id="upload-status" style="font-size:0.85rem;color:#aaa"></span>
   </div>
+  <div class="progress-bar" id="upload-progress-bar" style="margin-top:0.5rem;display:none"><div class="progress-fill" id="upload-progress-fill"></div></div>
 </section>
 
 <script>
@@ -575,6 +579,155 @@ document.getElementById('btn-download-json').addEventListener('click', () => {
   const blob = new Blob([document.getElementById('json-out').textContent], { type: 'application/json' });
   const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: 'mute-regions.json' });
   a.click();
+});
+
+// ─── Drive helpers ────────────────────────────────────────
+const DRIVE_API  = 'https://www.googleapis.com/drive/v3';
+const UPLOAD_API = 'https://www.googleapis.com/upload/drive/v3';
+let _driveToken = null, _driveTokenExpiry = 0;
+
+async function getDriveToken() {
+  if (_driveToken && _driveTokenExpiry > Date.now()) return _driveToken;
+  const res = await fetch('/api/auth/refresh');
+  if (!res.ok) throw new Error('Drive not configured — run /api/auth/google first');
+  const data = await res.json();
+  _driveToken = data.access_token;
+  _driveTokenExpiry = Date.now() + ((data.expires_in || 3600) - 60) * 1000;
+  return _driveToken;
+}
+
+async function findOrCreateDriveFolder(name) {
+  const token = await getDriveToken();
+  const q = `name='${name}' and mimeType='application/vnd.google-apps.folder' and trashed=false`;
+  const search = await fetch(
+    `${DRIVE_API}/files?q=${encodeURIComponent(q)}&fields=files(id)&spaces=drive&supportsAllDrives=true&includeItemsFromAllDrives=true`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  const data = await search.json();
+  if (data.files && data.files.length) return data.files[0].id;
+  const create = await fetch(`${DRIVE_API}/files?supportsAllDrives=true`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, mimeType: 'application/vnd.google-apps.folder' })
+  });
+  if (!create.ok) throw new Error(`Failed to create Drive folder: ${create.status}`);
+  return (await create.json()).id;
+}
+
+async function uploadBlob(blob, name, folderId, mimeType, onProgress) {
+  const token = await getDriveToken();
+  const initRes = await fetch(`${UPLOAD_API}/files?uploadType=resumable&supportsAllDrives=true`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      'X-Upload-Content-Type': mimeType,
+      'X-Upload-Content-Length': String(blob.size)
+    },
+    body: JSON.stringify({ name, parents: [folderId], mimeType })
+  });
+  if (!initRes.ok) throw new Error(`Upload init failed: ${initRes.status}`);
+  const uploadUrl = initRes.headers.get('Location');
+  if (!uploadUrl) throw new Error('No upload URL from Drive');
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', uploadUrl);
+    xhr.setRequestHeader('Content-Type', mimeType);
+    xhr.upload.onprogress = e => { if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total); };
+    xhr.onload = () => xhr.status >= 200 && xhr.status < 300 ? resolve(JSON.parse(xhr.responseText)) : reject(new Error(`Upload failed: ${xhr.status}`));
+    xhr.onerror = () => reject(new Error('Upload network error'));
+    xhr.send(blob);
+  });
+}
+
+// ─── Process & Upload handler ─────────────────────────────
+document.getElementById('btn-upload').addEventListener('click', async () => {
+  const btn        = document.getElementById('btn-upload');
+  const statusEl   = document.getElementById('upload-status');
+  const fillEl     = document.getElementById('upload-progress-fill');
+  const barEl      = document.getElementById('upload-progress-bar');
+
+  const file = fileInput.files[0];
+  if (!file)             { statusEl.textContent = 'No file loaded.';     return; }
+  if (!segments.length)  { statusEl.textContent = 'Run analysis first.'; return; }
+
+  btn.disabled = true;
+  barEl.style.display = 'block';
+  fillEl.style.width  = '0%';
+
+  try {
+    const ext        = file.name.split('.').pop().toLowerCase();
+    const inputName  = `input.${ext}`;
+    const outputName = 'output.mp4';
+    const baseName   = file.name.replace(/\.[^.]+$/, '');
+
+    let outputBlob, uploadName;
+
+    if (muteRegions.length === 0) {
+      // Nothing to silence — upload the original as-is (keep original name + type)
+      statusEl.textContent = 'No female regions — uploading original...';
+      fillEl.style.width = '70%';
+      outputBlob = file;
+      uploadName = file.name;
+    } else {
+      uploadName = baseName + '.mp4';
+      // Load FFmpeg WASM and bake the silence into the audio track
+      statusEl.textContent = 'Loading FFmpeg…';
+      fillEl.style.width = '5%';
+
+      const { FFmpeg }            = await import('https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/esm/index.js');
+      const { toBlobURL, fetchFile } = await import('https://unpkg.com/@ffmpeg/util@0.12.1/dist/esm/index.js');
+
+      const ffmpeg  = new FFmpeg();
+      const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm';
+      await ffmpeg.load({
+        coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`,   'text/javascript'),
+        wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
+      });
+
+      statusEl.textContent = 'Writing file…';
+      fillEl.style.width = '20%';
+      await ffmpeg.writeFile(inputName, await fetchFile(file));
+
+      // volume='if(between(t,s1,e1)+between(t,s2,e2)+...,0,1)'
+      const expr   = muteRegions.map(r => `between(t,${r.start},${r.end})`).join('+');
+      const filter = `volume='if(${expr},0,1)'`;
+
+      ffmpeg.on('progress', ({ progress }) => {
+        fillEl.style.width = (20 + Math.round(progress * 48)) + '%';
+        statusEl.textContent = `Processing audio… ${Math.round(progress * 100)}%`;
+      });
+
+      await ffmpeg.exec(['-i', inputName, '-af', filter, '-c:v', 'copy', outputName]);
+
+      const data = await ffmpeg.readFile(outputName);
+      outputBlob = new Blob([data], { type: 'video/mp4' });
+
+      await ffmpeg.deleteFile(inputName).catch(() => {});
+      await ffmpeg.deleteFile(outputName).catch(() => {});
+    }
+
+    statusEl.textContent = 'Finding Drive folder…';
+    fillEl.style.width = '70%';
+    const folderId = await findOrCreateDriveFolder('Omegle Source');
+
+    statusEl.textContent = 'Uploading…';
+    const mimeType = outputBlob === file ? (file.type || 'video/mp4') : 'video/mp4';
+    const uploaded = await uploadBlob(outputBlob, uploadName, folderId, mimeType, pct => {
+      fillEl.style.width = (70 + pct * 29) + '%';
+      statusEl.textContent = `Uploading… ${Math.round(pct * 100)}%`;
+    });
+
+    fillEl.style.width = '100%';
+    statusEl.textContent = `✓ Saved "${uploaded.name}" to Omegle Source folder.`;
+    btn.textContent = 'Process & Upload to Drive';
+
+  } catch (err) {
+    statusEl.textContent = 'Error: ' + err.message;
+    console.error(err);
+  } finally {
+    btn.disabled = false;
+  }
 });
 </script>
 </body>
