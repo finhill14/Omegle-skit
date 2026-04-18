@@ -599,30 +599,32 @@ async function getDriveToken() {
 async function findOrCreateDriveFolder(name) {
   const token = await getDriveToken();
   const q = `name='${name}' and mimeType='application/vnd.google-apps.folder' and trashed=false`;
-  const search = await fetch(`${DRIVE_API}/files?q=${encodeURIComponent(q)}&fields=files(id)&spaces=drive`, {
-    headers: { Authorization: `Bearer ${token}` }
-  });
+  const search = await fetch(
+    `${DRIVE_API}/files?q=${encodeURIComponent(q)}&fields=files(id)&spaces=drive&supportsAllDrives=true&includeItemsFromAllDrives=true`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
   const data = await search.json();
   if (data.files && data.files.length) return data.files[0].id;
-  const create = await fetch(`${DRIVE_API}/files`, {
+  const create = await fetch(`${DRIVE_API}/files?supportsAllDrives=true`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ name, mimeType: 'application/vnd.google-apps.folder' })
   });
+  if (!create.ok) throw new Error(`Failed to create Drive folder: ${create.status}`);
   return (await create.json()).id;
 }
 
-async function uploadBlob(blob, name, folderId, onProgress) {
+async function uploadBlob(blob, name, folderId, mimeType, onProgress) {
   const token = await getDriveToken();
-  const initRes = await fetch(`${UPLOAD_API}/files?uploadType=resumable`, {
+  const initRes = await fetch(`${UPLOAD_API}/files?uploadType=resumable&supportsAllDrives=true`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${token}`,
       'Content-Type': 'application/json',
-      'X-Upload-Content-Type': 'video/mp4',
+      'X-Upload-Content-Type': mimeType,
       'X-Upload-Content-Length': String(blob.size)
     },
-    body: JSON.stringify({ name, parents: [folderId], mimeType: 'video/mp4' })
+    body: JSON.stringify({ name, parents: [folderId], mimeType })
   });
   if (!initRes.ok) throw new Error(`Upload init failed: ${initRes.status}`);
   const uploadUrl = initRes.headers.get('Location');
@@ -630,7 +632,7 @@ async function uploadBlob(blob, name, folderId, onProgress) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('PUT', uploadUrl);
-    xhr.setRequestHeader('Content-Type', 'video/mp4');
+    xhr.setRequestHeader('Content-Type', mimeType);
     xhr.upload.onprogress = e => { if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total); };
     xhr.onload = () => xhr.status >= 200 && xhr.status < 300 ? resolve(JSON.parse(xhr.responseText)) : reject(new Error(`Upload failed: ${xhr.status}`));
     xhr.onerror = () => reject(new Error('Upload network error'));
@@ -646,8 +648,8 @@ document.getElementById('btn-upload').addEventListener('click', async () => {
   const barEl      = document.getElementById('upload-progress-bar');
 
   const file = fileInput.files[0];
-  if (!file)        { statusEl.textContent = 'No file loaded.';         return; }
-  if (!muteRegions) { statusEl.textContent = 'Run analysis first.';     return; }
+  if (!file)             { statusEl.textContent = 'No file loaded.';     return; }
+  if (!segments.length)  { statusEl.textContent = 'Run analysis first.'; return; }
 
   btn.disabled = true;
   barEl.style.display = 'block';
@@ -657,16 +659,18 @@ document.getElementById('btn-upload').addEventListener('click', async () => {
     const ext        = file.name.split('.').pop().toLowerCase();
     const inputName  = `input.${ext}`;
     const outputName = 'output.mp4';
-    const uploadName = file.name.replace(/\.[^.]+$/, '') + '.mp4';
+    const baseName   = file.name.replace(/\.[^.]+$/, '');
 
-    let outputBlob;
+    let outputBlob, uploadName;
 
     if (muteRegions.length === 0) {
-      // Nothing to silence — upload the original directly
+      // Nothing to silence — upload the original as-is (keep original name + type)
       statusEl.textContent = 'No female regions — uploading original...';
       fillEl.style.width = '70%';
       outputBlob = file;
+      uploadName = file.name;
     } else {
+      uploadName = baseName + '.mp4';
       // Load FFmpeg WASM and bake the silence into the audio track
       statusEl.textContent = 'Loading FFmpeg…';
       fillEl.style.width = '5%';
@@ -697,7 +701,7 @@ document.getElementById('btn-upload').addEventListener('click', async () => {
       await ffmpeg.exec(['-i', inputName, '-af', filter, '-c:v', 'copy', outputName]);
 
       const data = await ffmpeg.readFile(outputName);
-      outputBlob = new Blob([data.buffer], { type: 'video/mp4' });
+      outputBlob = new Blob([data], { type: 'video/mp4' });
 
       await ffmpeg.deleteFile(inputName).catch(() => {});
       await ffmpeg.deleteFile(outputName).catch(() => {});
@@ -708,14 +712,15 @@ document.getElementById('btn-upload').addEventListener('click', async () => {
     const folderId = await findOrCreateDriveFolder('Omegle Source');
 
     statusEl.textContent = 'Uploading…';
-    const uploaded = await uploadBlob(outputBlob, uploadName, folderId, pct => {
+    const mimeType = outputBlob === file ? (file.type || 'video/mp4') : 'video/mp4';
+    const uploaded = await uploadBlob(outputBlob, uploadName, folderId, mimeType, pct => {
       fillEl.style.width = (70 + pct * 29) + '%';
       statusEl.textContent = `Uploading… ${Math.round(pct * 100)}%`;
     });
 
     fillEl.style.width = '100%';
     statusEl.textContent = `✓ Saved "${uploaded.name}" to Omegle Source folder.`;
-    btn.textContent = 'Upload another';
+    btn.textContent = 'Process & Upload to Drive';
 
   } catch (err) {
     statusEl.textContent = 'Error: ' + err.message;
