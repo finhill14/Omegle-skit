@@ -135,7 +135,9 @@ const btnAnalyze = document.getElementById('btn-analyze');
 fileInput.addEventListener('change', () => {
   const file = fileInput.files[0];
   if (!file) return;
-  teardownAudio(); // reset all audio state when new file loaded
+  teardownAudio();
+  // Reset stale analysis state so a new file can't be uploaded with old mute regions
+  segments = []; muteRegions = []; duration = 0;
   videoEl.src = URL.createObjectURL(file);
   videoEl.load();
   btnAnalyze.disabled = false;
@@ -569,19 +571,26 @@ document.getElementById('btn-stop').addEventListener('click', () => {
   videoEl.pause();
   videoEl.currentTime = 0;
   mutedMode = false;
-  if (gainNode) gainNode.gain.value = 1;
+  if (gainNode && audioCtx) {
+    gainNode.gain.cancelScheduledValues(audioCtx.currentTime);
+    gainNode.gain.setValueAtTime(1, audioCtx.currentTime);
+  }
 });
 
 // ─── Export ───────────────────────────────────────────────
 document.getElementById('btn-copy').addEventListener('click', () => {
+  const btn = document.getElementById('btn-copy');
   navigator.clipboard.writeText(document.getElementById('json-out').textContent)
-    .then(() => { document.getElementById('btn-copy').textContent = 'Copied!'; setTimeout(() => document.getElementById('btn-copy').textContent = 'Copy JSON', 2000); });
+    .then(() => { btn.textContent = 'Copied!'; setTimeout(() => btn.textContent = 'Copy JSON', 2000); })
+    .catch(() => { btn.textContent = 'Copy failed'; setTimeout(() => btn.textContent = 'Copy JSON', 2000); });
 });
 
 document.getElementById('btn-download-json').addEventListener('click', () => {
   const blob = new Blob([document.getElementById('json-out').textContent], { type: 'application/json' });
-  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: 'mute-regions.json' });
+  const url = URL.createObjectURL(blob);
+  const a = Object.assign(document.createElement('a'), { href: url, download: 'mute-regions.json' });
   a.click();
+  URL.revokeObjectURL(url);
 });
 
 // ─── Drive helpers ────────────────────────────────────────
