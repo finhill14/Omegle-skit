@@ -691,29 +691,10 @@ async function processAndUpload() {
   const sourceVideo = state.allVideos[state.currentIndex];
 
   try {
-    titleEl.textContent = 'Loading FFmpeg...';
-    statusEl.textContent = 'Downloading video processor (first time only)...';
-    setProgress(0);
-
-    await loadFFmpeg(msg => { statusEl.textContent = msg; });
-
-    titleEl.textContent = 'Merging Video...';
-    statusEl.textContent = 'Combining top & bottom into 9:16...';
-    setProgress(0);
-
-    const mergedBlob = await mergeVideos(state.currentVideoBlob, state.webcamBlob, p => setProgress(p * 100));
-
     const baseName = sourceVideo.name.replace(/\.[^.]+$/, '');
     const webcamExt = state.webcamMime.split(';')[0].split('/')[1] || 'webm';
 
-    titleEl.textContent = 'Uploading merged video...';
-    statusEl.textContent = 'Saving combined skit to Omegle Complete...';
-    setProgress(0);
-
-    const mergedName = `skit_${state.username}_${baseName}.mp4`;
-    await uploadToDrive(mergedBlob, mergedName, state.outputFolderId, p => setProgress(p * 100));
-
-    titleEl.textContent = 'Uploading raw recording...';
+    titleEl.textContent = 'Uploading recording...';
     statusEl.textContent = 'Saving your recording to Omegle Complete...';
     setProgress(0);
 
