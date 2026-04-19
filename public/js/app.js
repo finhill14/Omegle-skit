@@ -505,6 +505,8 @@ let syncInterval = null;
 let audioCtx = null;
 let webcamAudioBuffer = null;
 let webcamAudioSource = null;
+let previewTopSource = null;
+let previewTopGain = null;
 
 function getAudioCtx() {
   if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -525,6 +527,37 @@ function playWebcamAudio(offset = 0) {
   webcamAudioSource.buffer = webcamAudioBuffer;
   webcamAudioSource.connect(getAudioCtx().destination);
   webcamAudioSource.start(0, offset);
+}
+
+function setupPreviewTopAudio() {
+  if (previewTopSource) return;
+  try {
+    const ctx = getAudioCtx();
+    previewTopSource = ctx.createMediaElementSource(previewTop);
+    previewTopGain = ctx.createGain();
+    previewTopSource.connect(previewTopGain);
+    previewTopGain.connect(ctx.destination);
+  } catch (e) {
+    console.warn('Preview top audio setup failed:', e);
+    previewTopSource = null;
+    previewTopGain = null;
+  }
+}
+
+function schedulePreviewGain(fromVideoTime) {
+  const muteRegions = state.allVideos[state.currentIndex]?.muteRegions || [];
+  if (!previewTopGain || !audioCtx || !muteRegions.length) return;
+  const t0 = audioCtx.currentTime;
+  previewTopGain.gain.cancelScheduledValues(t0);
+  const inMute = muteRegions.some(r => fromVideoTime >= r.start && fromVideoTime <= r.end);
+  previewTopGain.gain.setValueAtTime(inMute ? 0 : 1, t0);
+  for (const r of muteRegions) {
+    if (r.end <= fromVideoTime) continue;
+    const rStart = t0 + Math.max(0, r.start - fromVideoTime);
+    const rEnd   = t0 + (r.end - fromVideoTime);
+    if (r.start > fromVideoTime) previewTopGain.gain.setValueAtTime(0, rStart);
+    previewTopGain.gain.setValueAtTime(1, rEnd);
+  }
 }
 
 function initPreview() {
@@ -553,6 +586,7 @@ function initPreview() {
   previewTop.load();
   previewBottom.load();
   clearSync();
+  setupPreviewTopAudio();
 
   // Pre-decode webcam audio into AudioContext buffer in background
   webcamAudioBuffer = null;
@@ -572,6 +606,10 @@ function stopPreview() {
   previewTop.pause();
   previewBottom.pause();
   stopWebcamAudio();
+  if (previewTopGain && audioCtx) {
+    previewTopGain.gain.cancelScheduledValues(audioCtx.currentTime);
+    previewTopGain.gain.setValueAtTime(1, audioCtx.currentTime);
+  }
   clearSync();
   btnPlayPreview.textContent = 'Play Preview';
 }
@@ -585,7 +623,7 @@ btnPlayPreview.addEventListener('click', () => {
     getAudioCtx().resume().catch(() => {});
 
     // Both video play() calls synchronous — preserves iOS user-gesture context
-    previewTop.play().catch(() => {});
+    previewTop.play().then(() => schedulePreviewGain(0)).catch(() => {});
     previewBottom.play().catch(() => {}); // muted; video sync only
 
     // Webcam audio via AudioContext — if buffer ready, start immediately;
@@ -625,6 +663,7 @@ $('btn-rerecord').addEventListener('click', async () => {
   try {
     await initCamera();
     goTo('screen-record');
+    startRecording();
   } catch (err) {
     alert('Camera access failed: ' + err.message);
   }
