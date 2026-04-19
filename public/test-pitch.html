@@ -607,6 +607,9 @@ function renderRegionEditors() {
 function onRegionsChanged() {
   const jsonData = { videoDuration: +duration.toFixed(3), muteRegions };
   document.getElementById('json-out').textContent = JSON.stringify(jsonData, null, 2);
+  if (mutedMode && gainNode && audioCtx && !videoEl.paused) {
+    scheduleGain(videoEl.currentTime);
+  }
 }
 
 document.getElementById('btn-add-region').addEventListener('click', () => {
