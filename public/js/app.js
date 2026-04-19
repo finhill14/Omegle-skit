@@ -136,7 +136,7 @@ async function findOrCreateFolder(name) {
 async function listVideos(folderId) {
   const data = await driveGet('/files', {
     q: `'${folderId}' in parents and mimeType contains 'video/' and trashed=false`,
-    fields: 'files(id,name,mimeType)',
+    fields: 'files(id,name,mimeType,description)',
     orderBy: 'name',
     pageSize: '1000',
     supportsAllDrives: 'true',
@@ -257,9 +257,14 @@ async function mergeVideos(sourceBlob, webcamBlob, onProgress) {
     `[1:v]scale=1080:${bottomH}:force_original_aspect_ratio=increase,crop=1080:${bottomH},setsar=1[bottom];` +
     `[top][bottom]vstack=inputs=2[v]`;
 
+  const muteRegions = state.allVideos[state.currentIndex]?.muteRegions || [];
+  const audioFilter = muteRegions.length > 0
+    ? `[0:a]volume='if(${muteRegions.map(r => `between(t,${r.start},${r.end})`).join('+')},0,1)'[sa];[sa][1:a]amix=inputs=2:duration=shortest[a]`
+    : '[0:a][1:a]amix=inputs=2:duration=shortest[a]';
+
   let exitCode = await ffmpeg.exec([
     '-i', `source.${sourceExt}`, '-i', `webcam.${webcamExt}`,
-    '-filter_complex', videoFilter + ';[0:a][1:a]amix=inputs=2:duration=shortest[a]',
+    '-filter_complex', videoFilter + ';' + audioFilter,
     '-map', '[v]', '-map', '[a]',
     '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23',
     '-c:a', 'aac', '-b:a', '128k',
@@ -299,6 +304,49 @@ async function mergeVideos(sourceBlob, webcamBlob, onProgress) {
   await ffmpeg.deleteFile('output.mp4').catch(() => {});
 
   return new Blob([data], { type: 'video/mp4' });
+}
+
+// ─── Recording Audio Muting ──────────────────────────────
+let recAudioCtx = null;
+let recGainNode = null;
+let recMediaSource = null;
+
+function setupRecordingAudio() {
+  if (recMediaSource) return;
+  try {
+    recAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    recMediaSource = recAudioCtx.createMediaElementSource(prerecordedVideo);
+    recGainNode = recAudioCtx.createGain();
+    recMediaSource.connect(recGainNode);
+    recGainNode.connect(recAudioCtx.destination);
+  } catch (e) {
+    console.warn('Recording audio setup failed:', e);
+  }
+}
+
+function teardownRecordingAudio() {
+  if (recAudioCtx) {
+    recAudioCtx.close().catch(() => {});
+    recAudioCtx = null;
+    recGainNode = null;
+    recMediaSource = null;
+  }
+}
+
+function scheduleRecordingGain(fromVideoTime) {
+  const muteRegions = state.allVideos[state.currentIndex]?.muteRegions || [];
+  if (!recGainNode || !recAudioCtx || !muteRegions.length) return;
+  const t0 = recAudioCtx.currentTime;
+  recGainNode.gain.cancelScheduledValues(t0);
+  const inMute = muteRegions.some(r => fromVideoTime >= r.start && fromVideoTime <= r.end);
+  recGainNode.gain.setValueAtTime(inMute ? 0 : 1, t0);
+  for (const r of muteRegions) {
+    if (r.end <= fromVideoTime) continue;
+    const rStart = t0 + Math.max(0, r.start - fromVideoTime);
+    const rEnd   = t0 + (r.end - fromVideoTime);
+    if (r.start > fromVideoTime) recGainNode.gain.setValueAtTime(0, rStart);
+    recGainNode.gain.setValueAtTime(1, rEnd);
+  }
 }
 
 // ─── Camera & Recording ─────────────────────────────────
@@ -367,7 +415,10 @@ function startRecording() {
 
   mediaRecorder.start(1000);
   prerecordedVideo.currentTime = 0;
-  prerecordedVideo.play().catch(() => {});
+  setupRecordingAudio();
+  const playPromise = prerecordedVideo.play().catch(() => {});
+  if (recAudioCtx && recAudioCtx.state === 'suspended') recAudioCtx.resume().catch(() => {});
+  playPromise.then(() => scheduleRecordingGain(0)).catch(() => {});
 
   isRecording = true;
   btnRecord.textContent = 'Stop Recording';
@@ -390,6 +441,10 @@ function startRecording() {
 function stopRecording() {
   if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
   prerecordedVideo.pause();
+  if (recGainNode && recAudioCtx) {
+    recGainNode.gain.cancelScheduledValues(recAudioCtx.currentTime);
+    recGainNode.gain.setValueAtTime(1, recAudioCtx.currentTime);
+  }
   isRecording = false;
   btnRecord.textContent = 'Start Recording';
   btnRecord.classList.remove('recording');
@@ -672,7 +727,16 @@ async function loadVideoList() {
     }
 
     const { completed } = await progressRes.json();
-    state.allVideos = sourceVideos;
+    state.allVideos = sourceVideos.map(v => {
+      let muteRegions = [];
+      try {
+        if (v.description) {
+          const parsed = JSON.parse(v.description);
+          if (Array.isArray(parsed.muteRegions)) muteRegions = parsed.muteRegions;
+        }
+      } catch {}
+      return { ...v, muteRegions };
+    });
     state.completedSet = new Set(completed);
 
     if (sourceVideos.length === 0) {
@@ -790,6 +854,7 @@ async function loadCurrentVideo() {
   const video = state.allVideos[state.currentIndex];
   if (!video) { goTo('screen-select'); return; }
 
+  teardownRecordingAudio();
   loadingVideo = true;
   goTo('screen-loading');
   $('loading-status').textContent = `Downloading: ${video.name}`;
