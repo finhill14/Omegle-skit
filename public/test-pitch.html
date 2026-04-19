@@ -43,6 +43,16 @@
     .seg-table tr.female td { color: #f48fb1; }
     .seg-table tr.male td { color: #81d4fa; }
     .seg-table tr.silence td { color: #555; }
+    /* Region editor */
+    .region-editor { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 6px; padding: 0.6rem; margin-bottom: 0.5rem; }
+    .region-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.4rem; }
+    .region-label { color: #f48fb1; font-size: 0.85rem; font-weight: 600; }
+    .region-slider-row { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.2rem; }
+    .slider-label { color: #888; font-size: 0.78rem; width: 2.5rem; }
+    .slider-value { color: #aaa; font-size: 0.78rem; min-width: 3.5rem; text-align: right; font-variant-numeric: tabular-nums; }
+    input[type="range"] { -webkit-appearance: none; appearance: none; flex: 1; height: 4px; background: #333; border-radius: 2px; outline: none; }
+    input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; background: #4fc3f7; border-radius: 50%; cursor: pointer; }
+    input[type="range"]::-moz-range-thumb { width: 16px; height: 16px; background: #4fc3f7; border-radius: 50%; cursor: pointer; border: none; }
     /* JSON output */
     pre { background: #0d0d0d; border: 1px solid #1e1e1e; border-radius: 6px; padding: 0.75rem; font-size: 0.78rem; color: #4fc3f7; overflow-x: auto; max-height: 200px; }
     .note { background: #1a2a1a; border-left: 3px solid #43a047; padding: 0.6rem 0.75rem; border-radius: 4px; font-size: 0.82rem; color: #aaa; }
@@ -99,7 +109,12 @@
     </table>
   </div>
 
-  <h2 style="margin-top:1rem">6 — Mute regions JSON</h2>
+  <h2 style="margin-top:1rem">6 — Edit mute regions</h2>
+  <p style="color:#666;font-size:0.8rem;margin-bottom:0.5rem">Drag the sliders to fine-tune each region's start and end. Use playback to verify.</p>
+  <div id="region-editors"></div>
+  <button class="btn" id="btn-add-region" style="margin-top:0.5rem">+ Add region</button>
+
+  <h2 style="margin-top:1rem">7 — Mute regions JSON</h2>
   <p style="color:#666;font-size:0.8rem;margin-bottom:0.4rem">These are the regions that would be muted in the source audio during merge.</p>
   <pre id="json-out"></pre>
   <div class="row" style="margin-top:0.5rem">
@@ -107,7 +122,7 @@
     <button class="btn" id="btn-download-json">Download JSON</button>
   </div>
 
-  <h2 style="margin-top:1rem">7 — Process &amp; Upload to Drive</h2>
+  <h2 style="margin-top:1rem">8 — Process &amp; Upload to Drive</h2>
   <p style="color:#666;font-size:0.8rem;margin-bottom:0.75rem">Happy with the detection? This will upload <strong style="color:#aaa">two copies</strong>: the original (for models to preview) to <strong style="color:#aaa">Omegle Originals</strong>, and the female-muted version (for recording) to <strong style="color:#aaa">Omegle Source</strong>.</p>
   <div class="row">
     <button class="btn btn-primary" id="btn-upload">Process &amp; Upload to Drive</button>
@@ -473,6 +488,15 @@ function renderResults() {
       cx.fillStyle = COLOR[s.type] || '#333';
       cx.fillRect(x, 0, w, H);
     });
+    muteRegions.forEach(r => {
+      const x = (r.start / duration) * W;
+      const w = Math.max(1, ((r.end - r.start) / duration) * W);
+      cx.fillStyle = 'rgba(244, 143, 177, 0.25)';
+      cx.fillRect(x, 0, w, H);
+      cx.fillStyle = '#f48fb1';
+      cx.fillRect(x, 0, 1.5, H);
+      cx.fillRect(x + w - 1.5, 0, 1.5, H);
+    });
     if (duration > 0) {
       const ph = (videoEl.currentTime / duration) * W;
       cx.fillStyle = '#fff';
@@ -495,7 +519,105 @@ function renderResults() {
   // JSON
   const jsonData = { videoDuration: +duration.toFixed(3), muteRegions };
   document.getElementById('json-out').textContent = JSON.stringify(jsonData, null, 2);
+
+  renderRegionEditors();
 }
+
+// ─── Region editor ───────────────────────────────────────
+function renderRegionEditors() {
+  const container = document.getElementById('region-editors');
+  container.innerHTML = '';
+
+  muteRegions.forEach((r, i) => {
+    const editor = document.createElement('div');
+    editor.className = 'region-editor';
+
+    const header = document.createElement('div');
+    header.className = 'region-header';
+
+    const label = document.createElement('span');
+    label.className = 'region-label';
+    label.textContent = `Region ${i + 1}`;
+
+    const removeBtn = document.createElement('button');
+    removeBtn.className = 'btn';
+    removeBtn.style.cssText = 'padding:0.2rem 0.6rem;font-size:0.75rem;background:#c2185b;color:#fff';
+    removeBtn.textContent = 'Remove';
+
+    header.append(label, removeBtn);
+
+    function makeSliderRow(labelText, value, onChange) {
+      const row = document.createElement('div');
+      row.className = 'region-slider-row';
+
+      const lbl = document.createElement('span');
+      lbl.className = 'slider-label';
+      lbl.textContent = labelText;
+
+      const slider = document.createElement('input');
+      slider.type = 'range';
+      slider.min = '0';
+      slider.max = String(duration);
+      slider.step = '0.05';
+      slider.value = String(value);
+
+      const val = document.createElement('span');
+      val.className = 'slider-value';
+      val.textContent = value.toFixed(2) + 's';
+
+      slider.addEventListener('input', () => {
+        const v = onChange(parseFloat(slider.value));
+        slider.value = String(v);
+        val.textContent = v.toFixed(2) + 's';
+        onRegionsChanged();
+      });
+
+      row.append(lbl, slider, val);
+      return row;
+    }
+
+    const startRow = makeSliderRow('Start', r.start, v => {
+      muteRegions[i].start = +Math.min(v, muteRegions[i].end - 0.05).toFixed(2);
+      return muteRegions[i].start;
+    });
+
+    const endRow = makeSliderRow('End', r.end, v => {
+      muteRegions[i].end = +Math.max(v, muteRegions[i].start + 0.05).toFixed(2);
+      return muteRegions[i].end;
+    });
+
+    removeBtn.addEventListener('click', () => {
+      muteRegions.splice(i, 1);
+      renderRegionEditors();
+      onRegionsChanged();
+    });
+
+    editor.append(header, startRow, endRow);
+    container.appendChild(editor);
+  });
+
+  if (muteRegions.length === 0) {
+    const empty = document.createElement('p');
+    empty.style.cssText = 'color:#555;font-size:0.82rem';
+    empty.textContent = 'No mute regions. Click "+ Add region" to create one manually.';
+    container.appendChild(empty);
+  }
+}
+
+function onRegionsChanged() {
+  const jsonData = { videoDuration: +duration.toFixed(3), muteRegions };
+  document.getElementById('json-out').textContent = JSON.stringify(jsonData, null, 2);
+}
+
+document.getElementById('btn-add-region').addEventListener('click', () => {
+  if (!duration) return;
+  const lastEnd = muteRegions.length > 0 ? muteRegions[muteRegions.length - 1].end : 0;
+  const newStart = +Math.min(lastEnd + 0.5, Math.max(0, duration - 2)).toFixed(2);
+  const newEnd = +Math.min(newStart + 2, duration).toFixed(2);
+  muteRegions.push({ start: newStart, end: newEnd });
+  renderRegionEditors();
+  onRegionsChanged();
+});
 
 function fmt(s) {
   const m = Math.floor(s / 60), sec = (s % 60).toFixed(2);
