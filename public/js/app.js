@@ -321,6 +321,9 @@ function setupRecordingAudio() {
     recGainNode.connect(recAudioCtx.destination);
   } catch (e) {
     console.warn('Recording audio setup failed:', e);
+    if (recAudioCtx) { recAudioCtx.close().catch(() => {}); recAudioCtx = null; }
+    recGainNode = null;
+    recMediaSource = null;
   }
 }
 
