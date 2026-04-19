@@ -122,8 +122,8 @@
     <button class="btn" id="btn-download-json">Download JSON</button>
   </div>
 
-  <h2 style="margin-top:1rem">8 — Process &amp; Upload to Drive</h2>
-  <p style="color:#666;font-size:0.8rem;margin-bottom:0.75rem">Happy with the detection? This will upload <strong style="color:#aaa">two copies</strong>: the original (for models to preview) to <strong style="color:#aaa">Omegle Originals</strong>, and the female-muted version (for recording) to <strong style="color:#aaa">Omegle Source</strong>.</p>
+  <h2 style="margin-top:1rem">8 — Upload to Drive</h2>
+  <p style="color:#666;font-size:0.8rem;margin-bottom:0.75rem">Uploads the original video to both <strong style="color:#aaa">Omegle Originals</strong> and <strong style="color:#aaa">Omegle Source</strong>, with the mute regions stored as metadata. The female voice is muted automatically during recording and in the final merge — no heavy processing needed here.</p>
   <div class="row">
     <button class="btn btn-primary" id="btn-upload">Process &amp; Upload to Drive</button>
     <span id="upload-status" style="font-size:0.85rem;color:#aaa"></span>
@@ -808,97 +808,48 @@ document.getElementById('btn-upload').addEventListener('click', async () => {
   fillEl.style.width  = '0%';
 
   try {
-    const ext        = file.name.split('.').pop().toLowerCase();
-    const inputName  = `input.${ext}`;
-    const outputName = 'output.mp4';
-    const baseName   = file.name.replace(/\.[^.]+$/, '');
-    const uploadName = muteRegions.length > 0 ? baseName + '.mp4' : file.name;
-
-    let strippedBlob;
-
-    if (muteRegions.length === 0) {
-      statusEl.textContent = 'No female regions — uploading both copies…';
-      fillEl.style.width = '5%';
-      strippedBlob = file;
-    } else {
-      statusEl.textContent = 'Downloading FFmpeg…';
-      fillEl.style.width = '5%';
-
-      const { FFmpeg }               = await import('https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/esm/index.js');
-      const { toBlobURL, fetchFile } = await import('https://unpkg.com/@ffmpeg/util@0.12.1/dist/esm/index.js');
-
-      const ffmpeg  = new FFmpeg();
-      const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm';
-
-      statusEl.textContent = 'Downloading FFmpeg core…';
-      fillEl.style.width = '7%';
-      const coreURL = await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript');
-
-      statusEl.textContent = 'Downloading FFmpeg WASM (~30MB, may take a moment)…';
-      fillEl.style.width = '9%';
-      const wasmURL = await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm');
-
-      statusEl.textContent = 'Initializing FFmpeg…';
-      fillEl.style.width = '13%';
-      const loadResult = await Promise.race([
-        ffmpeg.load({ coreURL, wasmURL }),
-        new Promise((_, reject) => setTimeout(() => reject(new Error(
-          'FFmpeg timed out. Your browser may not support WASM workers. Try Chrome or Firefox on desktop.'
-        )), 30000))
-      ]);
-
-      statusEl.textContent = 'Writing file…';
-      fillEl.style.width = '15%';
-      await ffmpeg.writeFile(inputName, await fetchFile(file));
-
-      const expr   = muteRegions.map(r => `between(t,${r.start},${r.end})`).join('+');
-      const filter = `volume='if(${expr},0,1)'`;
-
-      ffmpeg.on('progress', ({ progress }) => {
-        fillEl.style.width = (15 + Math.round(progress * 40)) + '%';
-        statusEl.textContent = `Processing audio… ${Math.round(progress * 100)}%`;
-      });
-
-      const mp4CompatibleInput = ['mp4', 'm4v', 'mov'].includes(ext);
-      const ffArgs = ['-i', inputName, '-af', filter];
-      if (mp4CompatibleInput) ffArgs.push('-c:v', 'copy');
-      ffArgs.push(outputName);
-      const exitCode = await ffmpeg.exec(ffArgs);
-      if (exitCode !== 0) throw new Error(`FFmpeg processing failed (exit code ${exitCode}). Try a different video format.`);
-
-      const data = await ffmpeg.readFile(outputName);
-      strippedBlob = new Blob([data], { type: 'video/mp4' });
-
-      await ffmpeg.deleteFile(inputName).catch(() => {});
-      await ffmpeg.deleteFile(outputName).catch(() => {});
-    }
+    const origMime = file.type || 'video/mp4';
 
     // Find/create both folders
     statusEl.textContent = 'Finding Drive folders…';
-    fillEl.style.width = '58%';
+    fillEl.style.width = '5%';
     const [originalsFolderId, sourceFolderId] = await Promise.all([
       findOrCreateDriveFolder('Omegle Originals'),
       findOrCreateDriveFolder('Omegle Source')
     ]);
 
     // Upload original (full audio) to Originals folder
-    statusEl.textContent = 'Uploading original…';
-    const origMime = file.type || 'video/mp4';
-    await uploadBlob(file, uploadName, originalsFolderId, origMime, pct => {
-      fillEl.style.width = (60 + pct * 18) + '%';
-      statusEl.textContent = `Uploading original… ${Math.round(pct * 100)}%`;
+    statusEl.textContent = 'Uploading to Originals…';
+    fillEl.style.width = '10%';
+    await uploadBlob(file, file.name, originalsFolderId, origMime, pct => {
+      fillEl.style.width = (10 + pct * 40) + '%';
+      statusEl.textContent = `Uploading to Originals… ${Math.round(pct * 100)}%`;
     });
 
-    // Upload stripped (female-muted) to Source folder
-    statusEl.textContent = 'Uploading processed…';
-    const strippedMime = strippedBlob === file ? origMime : 'video/mp4';
-    await uploadBlob(strippedBlob, uploadName, sourceFolderId, strippedMime, pct => {
-      fillEl.style.width = (80 + pct * 19) + '%';
-      statusEl.textContent = `Uploading processed… ${Math.round(pct * 100)}%`;
+    // Upload same file to Source folder (muting happens later via Web Audio / FFmpeg filter)
+    statusEl.textContent = 'Uploading to Source…';
+    fillEl.style.width = '52%';
+    const sourceFile = await uploadBlob(file, file.name, sourceFolderId, origMime, pct => {
+      fillEl.style.width = (52 + pct * 40) + '%';
+      statusEl.textContent = `Uploading to Source… ${Math.round(pct * 100)}%`;
     });
+
+    // Store mute regions as Drive file description metadata
+    if (muteRegions.length > 0 && sourceFile && sourceFile.id) {
+      statusEl.textContent = 'Saving mute regions…';
+      fillEl.style.width = '94%';
+      const token = await getDriveToken();
+      const patchRes = await fetch(`${DRIVE_API}/files/${sourceFile.id}?supportsAllDrives=true`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ description: JSON.stringify({ muteRegions }) })
+      });
+      if (!patchRes.ok) throw new Error(`Failed to save mute regions: ${patchRes.status}`);
+    }
 
     fillEl.style.width = '100%';
-    statusEl.textContent = `✓ "${uploadName}" saved to both Omegle Originals and Omegle Source.`;
+    const regionNote = muteRegions.length ? ` with ${muteRegions.length} mute region(s)` : '';
+    statusEl.textContent = `✓ "${file.name}" saved to both folders${regionNote}.`;
     btn.textContent = 'Process & Upload to Drive';
 
   } catch (err) {
