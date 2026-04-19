@@ -692,6 +692,8 @@ document.getElementById('btn-upload').addEventListener('click', async () => {
     let strippedBlob;
 
     if (muteRegions.length === 0) {
+      statusEl.textContent = 'No female regions — uploading both copies…';
+      fillEl.style.width = '5%';
       strippedBlob = file;
     } else {
       statusEl.textContent = 'Loading FFmpeg…';

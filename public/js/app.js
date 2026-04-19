@@ -740,41 +740,26 @@ function showVideoOptions() {
   goTo('screen-video-options');
 }
 
+function cleanupPreview() {
+  const el = $('preview-original');
+  el.pause();
+  el.removeAttribute('src');
+  el.style.display = 'none';
+  if (state.originalVideoUrl) { URL.revokeObjectURL(state.originalVideoUrl); state.originalVideoUrl = null; }
+}
+
 $('btn-preview-lines').addEventListener('click', async () => {
   const video = state.allVideos[state.currentIndex];
-  const originalId = state.originalMap[video.name];
+  const fileId = state.originalMap[video.name] || video.id;
   const previewEl = $('preview-original');
   const loadingEl = $('preview-loading');
   const btn = $('btn-preview-lines');
-
-  if (!originalId) {
-    // No original found — fall back to the stripped source version
-    btn.disabled = true;
-    loadingEl.style.display = 'block';
-    try {
-      const blob = await downloadFile(video.id, p => {
-        $('preview-loading-text').textContent = `Downloading… ${Math.round(p * 100)}%`;
-      });
-      if (state.originalVideoUrl) URL.revokeObjectURL(state.originalVideoUrl);
-      state.originalVideoUrl = URL.createObjectURL(blob);
-      previewEl.src = state.originalVideoUrl;
-      previewEl.style.display = 'block';
-      loadingEl.style.display = 'none';
-      previewEl.play().catch(() => {});
-    } catch (err) {
-      alert('Download failed: ' + err.message);
-      loadingEl.style.display = 'none';
-    } finally {
-      btn.disabled = false;
-    }
-    return;
-  }
 
   btn.disabled = true;
   loadingEl.style.display = 'block';
 
   try {
-    const blob = await downloadFile(originalId, p => {
+    const blob = await downloadFile(fileId, p => {
       $('preview-loading-text').textContent = `Downloading… ${Math.round(p * 100)}%`;
     });
     if (state.originalVideoUrl) URL.revokeObjectURL(state.originalVideoUrl);
@@ -792,13 +777,12 @@ $('btn-preview-lines').addEventListener('click', async () => {
 });
 
 $('btn-start-record').addEventListener('click', () => {
-  $('preview-original').pause();
+  cleanupPreview();
   loadCurrentVideo();
 });
 
 $('btn-options-back').addEventListener('click', () => {
-  $('preview-original').pause();
-  $('preview-original').removeAttribute('src');
+  cleanupPreview();
   goTo('screen-select');
 });
 
@@ -856,7 +840,7 @@ $('btn-back').addEventListener('click', () => {
     stopRecording();
   }
   stopCamera();
-  goTo('screen-select');
+  showVideoOptions();
 });
 
 $('btn-next').addEventListener('click', () => {
