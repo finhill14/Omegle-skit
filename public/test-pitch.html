@@ -821,7 +821,7 @@ document.getElementById('btn-upload').addEventListener('click', async () => {
       fillEl.style.width = '5%';
       strippedBlob = file;
     } else {
-      statusEl.textContent = 'Loading FFmpeg…';
+      statusEl.textContent = 'Downloading FFmpeg…';
       fillEl.style.width = '5%';
 
       const { FFmpeg }               = await import('https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/esm/index.js');
@@ -829,10 +829,23 @@ document.getElementById('btn-upload').addEventListener('click', async () => {
 
       const ffmpeg  = new FFmpeg();
       const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm';
-      await ffmpeg.load({
-        coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`,   'text/javascript'),
-        wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
-      });
+
+      statusEl.textContent = 'Downloading FFmpeg core…';
+      fillEl.style.width = '7%';
+      const coreURL = await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript');
+
+      statusEl.textContent = 'Downloading FFmpeg WASM (~30MB, may take a moment)…';
+      fillEl.style.width = '9%';
+      const wasmURL = await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm');
+
+      statusEl.textContent = 'Initializing FFmpeg…';
+      fillEl.style.width = '13%';
+      const loadResult = await Promise.race([
+        ffmpeg.load({ coreURL, wasmURL }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error(
+          'FFmpeg timed out. Your browser may not support WASM workers. Try Chrome or Firefox on desktop.'
+        )), 30000))
+      ]);
 
       statusEl.textContent = 'Writing file…';
       fillEl.style.width = '15%';
