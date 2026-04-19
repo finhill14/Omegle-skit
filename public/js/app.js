@@ -259,7 +259,7 @@ async function mergeVideos(sourceBlob, webcamBlob, onProgress) {
 
   const muteRegions = state.allVideos[state.currentIndex]?.muteRegions || [];
   const audioFilter = muteRegions.length > 0
-    ? `[0:a]volume='if(${muteRegions.map(r => `between(t,${r.start},${r.end})`).join('+')},0,1)'[sa];[sa][1:a]amix=inputs=2:duration=shortest[a]`
+    ? `[0:a]volume='if(${muteRegions.map(r => `between(t,${r.start},${r.end})`).join('+')},0,1)':eval=frame[sa];[sa][1:a]amix=inputs=2:duration=shortest[a]`
     : '[0:a][1:a]amix=inputs=2:duration=shortest[a]';
 
   let exitCode = await ffmpeg.exec([
