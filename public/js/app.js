@@ -660,10 +660,11 @@ $('btn-rerecord').addEventListener('click', async () => {
   stopPreview();
   recTimer.textContent = '00:00';
   recTimer.hidden = true;
+  $('countdown-overlay').hidden = true;
+  $('countdown-num').textContent = '';
   try {
     await initCamera();
     goTo('screen-record');
-    startRecording();
   } catch (err) {
     alert('Camera access failed: ' + err.message);
   }
