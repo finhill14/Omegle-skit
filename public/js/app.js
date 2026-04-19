@@ -1,6 +1,7 @@
 const DRIVE_API = 'https://www.googleapis.com/drive/v3';
 const UPLOAD_API = 'https://www.googleapis.com/upload/drive/v3';
 const SOURCE_FOLDER = 'Omegle Source';
+const ORIGINAL_FOLDER = 'Omegle Originals';
 const OUTPUT_FOLDER = 'Omegle Complete';
 
 const state = {
@@ -9,7 +10,10 @@ const state = {
   sessionToken: null,
   username: null,
   sourceFolderId: null,
+  originalsFolderId: null,
   outputFolderId: null,
+  originalMap: {},
+  originalVideoUrl: null,
   allVideos: [],
   completedSet: new Set(),
   currentIndex: 0,
@@ -639,21 +643,27 @@ async function loadVideoList() {
   $('loading-status').textContent = 'Finding your Drive folders...';
 
   try {
-    const [sourceId, outputId] = await Promise.all([
+    const [sourceId, originalsId, outputId] = await Promise.all([
       findOrCreateFolder(SOURCE_FOLDER),
+      findOrCreateFolder(ORIGINAL_FOLDER),
       findOrCreateFolder(OUTPUT_FOLDER)
     ]);
     state.sourceFolderId = sourceId;
+    state.originalsFolderId = originalsId;
     state.outputFolderId = outputId;
 
     $('loading-status').textContent = 'Loading video list...';
 
-    const [sourceVideos, progressRes] = await Promise.all([
+    const [sourceVideos, originalVideos, progressRes] = await Promise.all([
       listVideos(sourceId),
+      listVideos(originalsId),
       fetch('/api/progress', {
         headers: { Authorization: `Bearer ${state.sessionToken}` }
       })
     ]);
+
+    state.originalMap = {};
+    originalVideos.forEach(v => { state.originalMap[v.name] = v.id; });
 
     if (progressRes.status === 401) {
       clearSession();
@@ -714,8 +724,83 @@ let loadingVideo = false;
 function selectVideo(index) {
   if (loadingVideo) return;
   state.currentIndex = index;
-  loadCurrentVideo();
+  showVideoOptions();
 }
+
+function showVideoOptions() {
+  const video = state.allVideos[state.currentIndex];
+  $('video-options-name').textContent = video.name;
+  const previewEl = $('preview-original');
+  previewEl.pause();
+  previewEl.style.display = 'none';
+  previewEl.removeAttribute('src');
+  $('preview-loading').style.display = 'none';
+  $('btn-preview-lines').textContent = 'Preview Conversation / Learn Lines';
+  $('btn-preview-lines').disabled = false;
+  goTo('screen-video-options');
+}
+
+$('btn-preview-lines').addEventListener('click', async () => {
+  const video = state.allVideos[state.currentIndex];
+  const originalId = state.originalMap[video.name];
+  const previewEl = $('preview-original');
+  const loadingEl = $('preview-loading');
+  const btn = $('btn-preview-lines');
+
+  if (!originalId) {
+    // No original found — fall back to the stripped source version
+    btn.disabled = true;
+    loadingEl.style.display = 'block';
+    try {
+      const blob = await downloadFile(video.id, p => {
+        $('preview-loading-text').textContent = `Downloading… ${Math.round(p * 100)}%`;
+      });
+      if (state.originalVideoUrl) URL.revokeObjectURL(state.originalVideoUrl);
+      state.originalVideoUrl = URL.createObjectURL(blob);
+      previewEl.src = state.originalVideoUrl;
+      previewEl.style.display = 'block';
+      loadingEl.style.display = 'none';
+      previewEl.play().catch(() => {});
+    } catch (err) {
+      alert('Download failed: ' + err.message);
+      loadingEl.style.display = 'none';
+    } finally {
+      btn.disabled = false;
+    }
+    return;
+  }
+
+  btn.disabled = true;
+  loadingEl.style.display = 'block';
+
+  try {
+    const blob = await downloadFile(originalId, p => {
+      $('preview-loading-text').textContent = `Downloading… ${Math.round(p * 100)}%`;
+    });
+    if (state.originalVideoUrl) URL.revokeObjectURL(state.originalVideoUrl);
+    state.originalVideoUrl = URL.createObjectURL(blob);
+    previewEl.src = state.originalVideoUrl;
+    previewEl.style.display = 'block';
+    loadingEl.style.display = 'none';
+    previewEl.play().catch(() => {});
+  } catch (err) {
+    alert('Download failed: ' + err.message);
+    loadingEl.style.display = 'none';
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$('btn-start-record').addEventListener('click', () => {
+  $('preview-original').pause();
+  loadCurrentVideo();
+});
+
+$('btn-options-back').addEventListener('click', () => {
+  $('preview-original').pause();
+  $('preview-original').removeAttribute('src');
+  goTo('screen-select');
+});
 
 async function loadCurrentVideo() {
   const video = state.allVideos[state.currentIndex];

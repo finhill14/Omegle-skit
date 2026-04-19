@@ -108,7 +108,7 @@
   </div>
 
   <h2 style="margin-top:1rem">7 — Process &amp; Upload to Drive</h2>
-  <p style="color:#666;font-size:0.8rem;margin-bottom:0.75rem">Happy with the detection? This will silence the female parts in the audio using FFmpeg, then upload the processed video to the <strong style="color:#aaa">Omegle Source</strong> folder in Drive.</p>
+  <p style="color:#666;font-size:0.8rem;margin-bottom:0.75rem">Happy with the detection? This will upload <strong style="color:#aaa">two copies</strong>: the original (for models to preview) to <strong style="color:#aaa">Omegle Originals</strong>, and the female-muted version (for recording) to <strong style="color:#aaa">Omegle Source</strong>.</p>
   <div class="row">
     <button class="btn btn-primary" id="btn-upload">Process &amp; Upload to Drive</button>
     <span id="upload-status" style="font-size:0.85rem;color:#aaa"></span>
@@ -687,22 +687,17 @@ document.getElementById('btn-upload').addEventListener('click', async () => {
     const inputName  = `input.${ext}`;
     const outputName = 'output.mp4';
     const baseName   = file.name.replace(/\.[^.]+$/, '');
+    const uploadName = muteRegions.length > 0 ? baseName + '.mp4' : file.name;
 
-    let outputBlob, uploadName;
+    let strippedBlob;
 
     if (muteRegions.length === 0) {
-      // Nothing to silence — upload the original as-is (keep original name + type)
-      statusEl.textContent = 'No female regions — uploading original...';
-      fillEl.style.width = '70%';
-      outputBlob = file;
-      uploadName = file.name;
+      strippedBlob = file;
     } else {
-      uploadName = baseName + '.mp4';
-      // Load FFmpeg WASM and bake the silence into the audio track
       statusEl.textContent = 'Loading FFmpeg…';
       fillEl.style.width = '5%';
 
-      const { FFmpeg }            = await import('https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/esm/index.js');
+      const { FFmpeg }               = await import('https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/esm/index.js');
       const { toBlobURL, fetchFile } = await import('https://unpkg.com/@ffmpeg/util@0.12.1/dist/esm/index.js');
 
       const ffmpeg  = new FFmpeg();
@@ -713,48 +708,57 @@ document.getElementById('btn-upload').addEventListener('click', async () => {
       });
 
       statusEl.textContent = 'Writing file…';
-      fillEl.style.width = '20%';
+      fillEl.style.width = '15%';
       await ffmpeg.writeFile(inputName, await fetchFile(file));
 
-      // volume='if(between(t,s1,e1)+between(t,s2,e2)+...,0,1)'
       const expr   = muteRegions.map(r => `between(t,${r.start},${r.end})`).join('+');
       const filter = `volume='if(${expr},0,1)'`;
 
       ffmpeg.on('progress', ({ progress }) => {
-        fillEl.style.width = (20 + Math.round(progress * 48)) + '%';
+        fillEl.style.width = (15 + Math.round(progress * 40)) + '%';
         statusEl.textContent = `Processing audio… ${Math.round(progress * 100)}%`;
       });
 
-      // -c:v copy only works when the input video codec is MP4-compatible (H264/H265).
-      // For webm/vp9 and other formats, omit it and let FFmpeg re-encode.
       const mp4CompatibleInput = ['mp4', 'm4v', 'mov'].includes(ext);
       const ffArgs = ['-i', inputName, '-af', filter];
       if (mp4CompatibleInput) ffArgs.push('-c:v', 'copy');
       ffArgs.push(outputName);
-      // ffmpeg.exec() resolves with exit code rather than rejecting on failure
       const exitCode = await ffmpeg.exec(ffArgs);
       if (exitCode !== 0) throw new Error(`FFmpeg processing failed (exit code ${exitCode}). Try a different video format.`);
 
       const data = await ffmpeg.readFile(outputName);
-      outputBlob = new Blob([data], { type: 'video/mp4' });
+      strippedBlob = new Blob([data], { type: 'video/mp4' });
 
       await ffmpeg.deleteFile(inputName).catch(() => {});
       await ffmpeg.deleteFile(outputName).catch(() => {});
     }
 
-    statusEl.textContent = 'Finding Drive folder…';
-    fillEl.style.width = '70%';
-    const folderId = await findOrCreateDriveFolder('Omegle Source');
+    // Find/create both folders
+    statusEl.textContent = 'Finding Drive folders…';
+    fillEl.style.width = '58%';
+    const [originalsFolderId, sourceFolderId] = await Promise.all([
+      findOrCreateDriveFolder('Omegle Originals'),
+      findOrCreateDriveFolder('Omegle Source')
+    ]);
 
-    statusEl.textContent = 'Uploading…';
-    const mimeType = outputBlob === file ? (file.type || 'video/mp4') : 'video/mp4';
-    const uploaded = await uploadBlob(outputBlob, uploadName, folderId, mimeType, pct => {
-      fillEl.style.width = (70 + pct * 29) + '%';
-      statusEl.textContent = `Uploading… ${Math.round(pct * 100)}%`;
+    // Upload original (full audio) to Originals folder
+    statusEl.textContent = 'Uploading original…';
+    const origMime = file.type || 'video/mp4';
+    await uploadBlob(file, uploadName, originalsFolderId, origMime, pct => {
+      fillEl.style.width = (60 + pct * 18) + '%';
+      statusEl.textContent = `Uploading original… ${Math.round(pct * 100)}%`;
+    });
+
+    // Upload stripped (female-muted) to Source folder
+    statusEl.textContent = 'Uploading processed…';
+    const strippedMime = strippedBlob === file ? origMime : 'video/mp4';
+    await uploadBlob(strippedBlob, uploadName, sourceFolderId, strippedMime, pct => {
+      fillEl.style.width = (80 + pct * 19) + '%';
+      statusEl.textContent = `Uploading processed… ${Math.round(pct * 100)}%`;
     });
 
     fillEl.style.width = '100%';
-    statusEl.textContent = `✓ Saved "${uploaded.name}" to Omegle Source folder.`;
+    statusEl.textContent = `✓ "${uploadName}" saved to both Omegle Originals and Omegle Source.`;
     btn.textContent = 'Process & Upload to Drive';
 
   } catch (err) {
