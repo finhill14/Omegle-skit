@@ -817,7 +817,7 @@ async function loadCurrentVideo() {
     $('loading-progress').hidden = true;
     loadingVideo = false;
     alert('Failed to download video: ' + err.message);
-    goTo('screen-select');
+    showVideoOptions();
     return;
   }
 
@@ -826,7 +826,7 @@ async function loadCurrentVideo() {
   } catch (err) {
     loadingVideo = false;
     alert('Camera access denied. Please allow camera and microphone access and reload the page.');
-    goTo('screen-select');
+    showVideoOptions();
     return;
   }
 
