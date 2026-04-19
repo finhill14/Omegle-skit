@@ -772,7 +772,7 @@ function renderVideoList() {
 
     const nameSpan = document.createElement('span');
     nameSpan.className = 'video-card-name';
-    nameSpan.textContent = video.name;
+    nameSpan.textContent = `Video ${index + 1}`;
 
     const statusSpan = document.createElement('span');
     statusSpan.className = 'video-card-status';
@@ -796,7 +796,7 @@ function selectVideo(index) {
 
 function showVideoOptions() {
   const video = state.allVideos[state.currentIndex];
-  $('video-options-name').textContent = video.name;
+  $('video-options-name').textContent = `Video ${state.currentIndex + 1}`;
   const previewEl = $('preview-original');
   previewEl.pause();
   previewEl.style.display = 'none';
@@ -860,7 +860,7 @@ async function loadCurrentVideo() {
   teardownRecordingAudio();
   loadingVideo = true;
   goTo('screen-loading');
-  $('loading-status').textContent = `Downloading: ${video.name}`;
+  $('loading-status').textContent = `Downloading: Video ${state.currentIndex + 1}`;
   $('loading-progress').hidden = false;
 
   try {
@@ -875,7 +875,7 @@ async function loadCurrentVideo() {
     prerecordedVideo.src = state.currentVideoUrl;
     prerecordedVideo.load();
 
-    $('current-name').textContent = video.name;
+    $('current-name').textContent = `Video ${state.currentIndex + 1}`;
     recTimer.textContent = '00:00';
     recTimer.hidden = true;
 
