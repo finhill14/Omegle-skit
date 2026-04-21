@@ -173,10 +173,12 @@
       if (ffmpeg) return;
       onStatus('Loading FFmpeg library…');
       const { FFmpeg } = await import('/js/ffmpeg/index.js');
-      const base = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm';
       const f = new FFmpeg();
-      const coreURL = await fetchAsBlobURL(`${base}/ffmpeg-core.js`, 'text/javascript', onStatus, 'Downloading FFmpeg core');
-      const wasmURL = await fetchAsBlobURL(`${base}/ffmpeg-core.wasm`, 'application/wasm', onStatus, 'Downloading FFmpeg WASM');
+      const coreURL = '/js/ffmpeg-core/ffmpeg-core.js';
+      const wasmURL = await fetchAsBlobURL(
+        'https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm/ffmpeg-core.wasm',
+        'application/wasm', onStatus, 'Downloading FFmpeg WASM'
+      );
       onStatus('Initializing FFmpeg…');
       await f.load({ coreURL, wasmURL });
       ffmpeg = f;
