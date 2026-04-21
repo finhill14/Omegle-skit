@@ -306,52 +306,6 @@ async function mergeVideos(sourceBlob, webcamBlob, onProgress) {
   return new Blob([data], { type: 'video/mp4' });
 }
 
-// ─── Recording Audio Muting ──────────────────────────────
-let recAudioCtx = null;
-let recGainNode = null;
-let recMediaSource = null;
-
-function setupRecordingAudio() {
-  if (recMediaSource) return;
-  try {
-    recAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    recMediaSource = recAudioCtx.createMediaElementSource(prerecordedVideo);
-    recGainNode = recAudioCtx.createGain();
-    recMediaSource.connect(recGainNode);
-    recGainNode.connect(recAudioCtx.destination);
-  } catch (e) {
-    console.warn('Recording audio setup failed:', e);
-    if (recAudioCtx) { recAudioCtx.close().catch(() => {}); recAudioCtx = null; }
-    recGainNode = null;
-    recMediaSource = null;
-  }
-}
-
-function teardownRecordingAudio() {
-  if (recAudioCtx) {
-    recAudioCtx.close().catch(() => {});
-    recAudioCtx = null;
-    recGainNode = null;
-    recMediaSource = null;
-  }
-}
-
-function scheduleRecordingGain(fromVideoTime) {
-  const muteRegions = state.allVideos[state.currentIndex]?.muteRegions || [];
-  if (!recGainNode || !recAudioCtx || !muteRegions.length) return;
-  const t0 = recAudioCtx.currentTime;
-  recGainNode.gain.cancelScheduledValues(t0);
-  const inMute = muteRegions.some(r => fromVideoTime >= r.start && fromVideoTime <= r.end);
-  recGainNode.gain.setValueAtTime(inMute ? 0 : 1, t0);
-  for (const r of muteRegions) {
-    if (r.end <= fromVideoTime) continue;
-    const rStart = t0 + Math.max(0, r.start - fromVideoTime);
-    const rEnd   = t0 + (r.end - fromVideoTime);
-    if (r.start > fromVideoTime) recGainNode.gain.setValueAtTime(0, rStart);
-    recGainNode.gain.setValueAtTime(1, rEnd);
-  }
-}
-
 // ─── Camera & Recording ─────────────────────────────────
 const prerecordedVideo = $('prerecorded-video');
 const webcamPreview = $('webcam-preview');
@@ -418,10 +372,8 @@ function startRecording() {
 
   mediaRecorder.start(1000);
   prerecordedVideo.currentTime = 0;
-  setupRecordingAudio();
-  const playPromise = prerecordedVideo.play().catch(() => {});
-  if (recAudioCtx && recAudioCtx.state === 'suspended') recAudioCtx.resume().catch(() => {});
-  playPromise.then(() => scheduleRecordingGain(0)).catch(() => {});
+  prerecordedVideo.muted = true;
+  prerecordedVideo.play().catch(() => {});
 
   isRecording = true;
   btnRecord.textContent = 'Stop Recording';
@@ -444,10 +396,7 @@ function startRecording() {
 function stopRecording() {
   if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
   prerecordedVideo.pause();
-  if (recGainNode && recAudioCtx) {
-    recGainNode.gain.cancelScheduledValues(recAudioCtx.currentTime);
-    recGainNode.gain.setValueAtTime(1, recAudioCtx.currentTime);
-  }
+  prerecordedVideo.muted = false;
   isRecording = false;
   btnRecord.textContent = 'Start Recording';
   btnRecord.classList.remove('recording');
@@ -878,7 +827,6 @@ async function loadCurrentVideo() {
   const video = state.allVideos[state.currentIndex];
   if (!video) { goTo('screen-select'); return; }
 
-  teardownRecordingAudio();
   loadingVideo = true;
   goTo('screen-loading');
   $('loading-status').textContent = `Downloading: Video ${state.currentIndex + 1}`;
