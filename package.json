@@ -2,5 +2,9 @@
   "name": "omegle-skit",
   "version": "2.0.0",
   "description": "Video response platform for creating split-screen omegle-style skits, powered by Google Drive and FFmpeg WASM",
-  "private": true
+  "private": true,
+  "dependencies": {
+    "@ffmpeg/ffmpeg": "^0.12.10",
+    "@ffmpeg/util": "^0.12.1"
+  }
 }
