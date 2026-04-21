@@ -237,8 +237,9 @@
       const { fetchFile } = await import('/js/ffmpeg-util/index.js');
 
       const sourceExt = sourceName.includes('.') ? sourceName.split('.').pop() : 'mp4';
-      onStatus('Writing files to FFmpeg…');
+      onStatus('Writing source file…');
       await ffmpeg.writeFile(`source.${sourceExt}`, await fetchFile(sourceBlob));
+      onStatus('Writing recording file…');
       await ffmpeg.writeFile(`rec.${recExt}`, await fetchFile(recBlob));
 
       const topH = 768, bottomH = 1152;
@@ -247,10 +248,6 @@
         `[1:v]scale=1080:${bottomH}:force_original_aspect_ratio=increase,crop=1080:${bottomH},setsar=1[bottom];` +
         `[top][bottom]vstack=inputs=2[v]`;
 
-      const audioFilter = muteRegions.length > 0
-        ? `[0:a]volume='if(${muteRegions.map(r => `between(t,${r.start},${r.end})`).join('+')},0,1)':eval=frame[sa];[sa][1:a]amix=inputs=2:duration=shortest[a]`
-        : `[0:a][1:a]amix=inputs=2:duration=shortest[a]`;
-
       const handler = ({ progress }) => {
         onProgress(Math.max(0, Math.min(1, progress)));
         onStatus(`Merging… ${Math.round(progress * 100)}%`);
@@ -258,39 +255,27 @@
       ffmpeg.on('progress', handler);
       ffmpeg.on('log', ({ message }) => console.log('[ffmpeg]', message));
 
-      // Attempt 1: full merge with audio
+      onStatus('Merging (this may take a few minutes)…');
+
+      // Start with simplest: video stack + recording audio only
       let code = await ffmpeg.exec([
         '-i', `source.${sourceExt}`, '-i', `rec.${recExt}`,
-        '-filter_complex', videoFilter + ';' + audioFilter,
-        '-map', '[v]', '-map', '[a]',
-        '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23',
+        '-filter_complex', videoFilter,
+        '-map', '[v]', '-map', '1:a',
+        '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28',
         '-c:a', 'aac', '-b:a', '128k',
         '-shortest', '-movflags', '+faststart',
         '-y', 'output.mp4'
       ]);
 
-      // Attempt 2: recording audio only (source audio missing/incompatible)
+      // Fallback: video only (no audio)
       if (code !== 0) {
-        onStatus('Retrying with recording audio only…');
-        code = await ffmpeg.exec([
-          '-i', `source.${sourceExt}`, '-i', `rec.${recExt}`,
-          '-filter_complex', videoFilter,
-          '-map', '[v]', '-map', '1:a',
-          '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23',
-          '-c:a', 'aac', '-b:a', '128k',
-          '-shortest', '-movflags', '+faststart',
-          '-y', 'output.mp4'
-        ]);
-      }
-
-      // Attempt 3: video only (no audio at all)
-      if (code !== 0) {
-        onStatus('Retrying with video only…');
+        onStatus('Retrying without audio…');
         code = await ffmpeg.exec([
           '-i', `source.${sourceExt}`, '-i', `rec.${recExt}`,
           '-filter_complex', videoFilter,
           '-map', '[v]',
-          '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23',
+          '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28',
           '-shortest', '-movflags', '+faststart',
           '-y', 'output.mp4'
         ]);
