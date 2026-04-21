@@ -108,7 +108,7 @@
     async function uploadToDrive(blob, name, folderId, onProgress) {
       const token = await getToken();
       const mimeType = 'video/mp4';
-      const initRes = await fetch(`${DRIVE_API.replace('/v3', '')}/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true`, {
+      const initRes = await fetch(`https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true`, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${token}`,
@@ -301,11 +301,6 @@
 
       const data = await ffmpeg.readFile('output.mp4');
       await ffmpeg.deleteFile(`source.${sourceExt}`).catch(() => {});
-      await ffmpeg.deleteFile(`rec.${recExt}`).catch(() => {});
-      await ffmpeg.deleteFile('output.mp4').catch(() => {});
-
-      const data = await ffmpeg.readFile('output.mp4');
-      await ffmpeg.deleteFile('source.mp4').catch(() => {});
       await ffmpeg.deleteFile(`rec.${recExt}`).catch(() => {});
       await ffmpeg.deleteFile('output.mp4').catch(() => {});
 
