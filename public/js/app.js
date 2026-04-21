@@ -372,6 +372,7 @@ function startRecording() {
 
   mediaRecorder.start(1000);
   prerecordedVideo.currentTime = 0;
+  prerecordedVideo.muted = true;
   prerecordedVideo.play().catch(() => {});
 
   isRecording = true;
@@ -395,6 +396,7 @@ function startRecording() {
 function stopRecording() {
   if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
   prerecordedVideo.pause();
+  prerecordedVideo.muted = false;
   isRecording = false;
   btnRecord.textContent = 'Start Recording';
   btnRecord.classList.remove('recording');
