@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Skit Merger</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0a0a0a; color: #fff; padding: 1.5rem; max-width: 860px; margin: 0 auto; }
+    h1 { color: #4fc3f7; margin-bottom: 0.25rem; font-size: 1.4rem; }
+    .subtitle { color: #666; font-size: 0.85rem; margin-bottom: 1.5rem; }
+    #page-status { font-size: 0.9rem; color: #aaa; margin-bottom: 1.25rem; min-height: 1.2em; }
+    .error { color: #ef5350; }
+    .source-group { background: #111; border: 1px solid #222; border-radius: 8px; padding: 1rem; margin-bottom: 1rem; }
+    .source-title { font-size: 1rem; font-weight: 600; color: #fff; margin-bottom: 0.5rem; }
+    .recording-row { display: flex; align-items: center; gap: 0.75rem; padding: 0.6rem 0; border-top: 1px solid #1a1a1a; flex-wrap: wrap; }
+    .username { color: #4fc3f7; font-size: 0.88rem; font-weight: 600; min-width: 90px; }
+    .filename { color: #555; font-size: 0.75rem; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .btn { padding: 0.45rem 1rem; border: none; border-radius: 6px; font-size: 0.85rem; font-weight: 600; cursor: pointer; color: #fff; background: #333; white-space: nowrap; }
+    .btn:hover { background: #444; }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-green { background: #43a047; }
+    .btn-green:hover:not(:disabled) { background: #66bb6a; }
+    .progress-wrap { width: 100%; margin-top: 0.35rem; }
+    .progress-bar { height: 4px; background: #222; border-radius: 2px; overflow: hidden; }
+    .progress-fill { height: 100%; background: #4fc3f7; border-radius: 2px; width: 0; transition: width 0.15s; }
+    .row-status { font-size: 0.78rem; color: #888; margin-top: 0.25rem; }
+    .row-status.done { color: #43a047; }
+    .row-status.fail { color: #ef5350; }
+    .empty { color: #555; font-size: 0.9rem; text-align: center; padding: 3rem 1rem; }
+    .badge { font-size: 0.7rem; background: #1e3a2e; color: #43a047; border-radius: 4px; padding: 0.1rem 0.4rem; margin-left: 0.5rem; vertical-align: middle; }
+    .badge-muted { background: #2a1e2e; color: #ce93d8; }
+  </style>
+</head>
+<body>
+  <h1>Skit Merger</h1>
+  <p class="subtitle">Merges Omegle Source videos with model recordings into 9:16 — desktop only</p>
+  <p id="page-status">Connecting to Drive…</p>
+  <div id="pairs-container"></div>
+
+  <script type="module">
+    const DRIVE_API = 'https://www.googleapis.com/drive/v3';
+
+    // ─── Auth ─────────────────────────────────────────────
+    let _token = null, _tokenExpiry = 0;
+
+    async function getToken() {
+      if (_token && _tokenExpiry > Date.now()) return _token;
+      const res = await fetch('/api/auth/refresh');
+      if (!res.ok) throw new Error('Drive not configured — complete Google auth setup first');
+      const data = await res.json();
+      if (!data.access_token) throw new Error('No access token returned');
+      _token = data.access_token;
+      _tokenExpiry = Date.now() + ((data.expires_in || 3600) - 60) * 1000;
+      return _token;
+    }
+
+    // ─── Drive ────────────────────────────────────────────
+    async function findFolder(name) {
+      const token = await getToken();
+      const params = new URLSearchParams({
+        q: `name='${name}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+        fields: 'files(id)',
+        spaces: 'drive',
+        supportsAllDrives: 'true',
+        includeItemsFromAllDrives: 'true'
+      });
+      const res = await fetch(`${DRIVE_API}/files?${params}`, { headers: { Authorization: `Bearer ${token}` } });
+      const data = await res.json();
+      if (!data.files?.length) throw new Error(`Folder "${name}" not found in Drive`);
+      return data.files[0].id;
+    }
+
+    async function listVideos(folderId, fields = 'files(id,name,mimeType)') {
+      const token = await getToken();
+      const params = new URLSearchParams({
+        q: `'${folderId}' in parents and mimeType contains 'video/' and trashed=false`,
+        fields,
+        orderBy: 'name',
+        pageSize: '1000',
+        supportsAllDrives: 'true',
+        includeItemsFromAllDrives: 'true'
+      });
+      const res = await fetch(`${DRIVE_API}/files?${params}`, { headers: { Authorization: `Bearer ${token}` } });
+      const data = await res.json();
+      return data.files || [];
+    }
+
+    async function downloadFile(fileId, onProgress) {
+      const res = await fetch(`/api/video?id=${encodeURIComponent(fileId)}`);
+      if (!res.ok) throw new Error(`Download failed: ${res.status}`);
+      const contentLength = res.headers.get('content-length');
+      if (!contentLength || !res.body) return new Blob([await res.arrayBuffer()]);
+      const reader = res.body.getReader();
+      const total = parseInt(contentLength);
+      const chunks = [];
+      let received = 0;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        received += value.length;
+        if (onProgress) onProgress(received / total);
+      }
+      return new Blob(chunks);
+    }
+
+    // ─── Pair matching ────────────────────────────────────
+    // Source:    videoname.mp4           (in Omegle Source)
+    // Recording: raw_<user>_videoname.ext (in Omegle Complete)
+    function buildGroups(sourceFiles, completeFiles) {
+      const sourceMap = new Map();
+      sourceFiles.forEach(f => {
+        const base = f.name.replace(/\.[^.]+$/, '');
+        let muteRegions = [];
+        try {
+          if (f.description) {
+            const parsed = JSON.parse(f.description);
+            if (Array.isArray(parsed.muteRegions)) muteRegions = parsed.muteRegions;
+          }
+        } catch {}
+        sourceMap.set(base, { ...f, muteRegions });
+      });
+
+      const groups = new Map(); // sourceBase -> { source, recordings[] }
+
+      for (const f of completeFiles) {
+        if (!f.name.startsWith('raw_')) continue;
+        const withoutExt = f.name.replace(/\.[^.]+$/, '');
+        const withoutRaw = withoutExt.slice(4); // strip 'raw_'
+
+        // Match against all source basenames (handles usernames containing underscores)
+        let source = null, username = null;
+        for (const [base, src] of sourceMap) {
+          if (withoutRaw === base) {
+            source = src; username = '';
+          } else if (withoutRaw.endsWith('_' + base)) {
+            source = src;
+            username = withoutRaw.slice(0, withoutRaw.length - base.length - 1);
+          }
+          if (source) break;
+        }
+        if (!source) continue;
+
+        const key = source.name.replace(/\.[^.]+$/, '');
+        if (!groups.has(key)) groups.set(key, { source, recordings: [] });
+        groups.get(key).recordings.push({ file: f, username: username || '(unknown)' });
+      }
+
+      return [...groups.values()];
+    }
+
+    // ─── FFmpeg ───────────────────────────────────────────
+    let ffmpeg = null;
+
+    async function ensureFFmpeg(onStatus) {
+      if (ffmpeg) return;
+      onStatus('Downloading FFmpeg (~30MB, first time only)…');
+      const { FFmpeg } = await import('https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/esm/index.js');
+      const { toBlobURL } = await import('https://unpkg.com/@ffmpeg/util@0.12.1/dist/esm/index.js');
+      const base = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm';
+      const f = new FFmpeg();
+      const coreURL = await toBlobURL(`${base}/ffmpeg-core.js`, 'text/javascript');
+      const wasmURL = await toBlobURL(`${base}/ffmpeg-core.wasm`, 'application/wasm');
+      await f.load({ coreURL, wasmURL });
+      ffmpeg = f;
+    }
+
+    async function merge(sourceBlob, recBlob, recExt, muteRegions, onProgress, onStatus) {
+      const { fetchFile } = await import('https://unpkg.com/@ffmpeg/util@0.12.1/dist/esm/index.js');
+
+      onStatus('Writing files to FFmpeg…');
+      await ffmpeg.writeFile('source.mp4', await fetchFile(sourceBlob));
+      await ffmpeg.writeFile(`rec.${recExt}`, await fetchFile(recBlob));
+
+      const topH = 768, bottomH = 1152;
+      const videoFilter =
+        `[0:v]scale=1080:${topH}:force_original_aspect_ratio=increase,crop=1080:${topH},setsar=1[top];` +
+        `[1:v]scale=1080:${bottomH}:force_original_aspect_ratio=increase,crop=1080:${bottomH},setsar=1[bottom];` +
+        `[top][bottom]vstack=inputs=2[v]`;
+
+      const audioFilter = muteRegions.length > 0
+        ? `[0:a]volume='if(${muteRegions.map(r => `between(t,${r.start},${r.end})`).join('+')},0,1)':eval=frame[sa];[sa][1:a]amix=inputs=2:duration=shortest[a]`
+        : `[0:a][1:a]amix=inputs=2:duration=shortest[a]`;
+
+      const handler = ({ progress }) => onProgress(Math.max(0, Math.min(1, progress)));
+      ffmpeg.on('progress', handler);
+      onStatus('Merging video…');
+
+      const code = await ffmpeg.exec([
+        '-i', 'source.mp4', '-i', `rec.${recExt}`,
+        '-filter_complex', videoFilter + ';' + audioFilter,
+        '-map', '[v]', '-map', '[a]',
+        '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23',
+        '-c:a', 'aac', '-b:a', '128k',
+        '-shortest', '-movflags', '+faststart',
+        '-y', 'output.mp4'
+      ]);
+
+      ffmpeg.off('progress', handler);
+      if (code !== 0) throw new Error(`FFmpeg failed (exit code ${code})`);
+
+      const data = await ffmpeg.readFile('output.mp4');
+      await ffmpeg.deleteFile('source.mp4').catch(() => {});
+      await ffmpeg.deleteFile(`rec.${recExt}`).catch(() => {});
+      await ffmpeg.deleteFile('output.mp4').catch(() => {});
+
+      return new Blob([data], { type: 'video/mp4' });
+    }
+
+    // ─── Render ───────────────────────────────────────────
+    function render(groups, sourceFiles) {
+      const container = document.getElementById('pairs-container');
+
+      if (groups.length === 0) {
+        container.innerHTML = '<p class="empty">No matched pairs found.<br>Recordings in Omegle Complete must be named <code>raw_username_sourcename.ext</code>.</p>';
+        return;
+      }
+
+      // Source number index based on original sorted order
+      const sourceIndex = new Map(sourceFiles.map((f, i) => [f.name.replace(/\.[^.]+$/, ''), i + 1]));
+
+      container.innerHTML = '';
+      groups.forEach(({ source, recordings }) => {
+        const base = source.name.replace(/\.[^.]+$/, '');
+        const num = sourceIndex.get(base) ?? '?';
+        const hasMutes = source.muteRegions.length > 0;
+
+        const group = document.createElement('div');
+        group.className = 'source-group';
+
+        const title = document.createElement('div');
+        title.className = 'source-title';
+        title.innerHTML = `Video ${num}` +
+          (hasMutes ? `<span class="badge badge-muted">${source.muteRegions.length} mute region${source.muteRegions.length > 1 ? 's' : ''}</span>` : '');
+        group.appendChild(title);
+
+        recordings.forEach(({ file, username }) => {
+          const row = document.createElement('div');
+          row.className = 'recording-row';
+
+          const userEl = document.createElement('span');
+          userEl.className = 'username';
+          userEl.textContent = username;
+
+          const fileEl = document.createElement('span');
+          fileEl.className = 'filename';
+          fileEl.textContent = file.name;
+
+          const btn = document.createElement('button');
+          btn.className = 'btn btn-green';
+          btn.textContent = 'Merge & Download';
+
+          const progressWrap = document.createElement('div');
+          progressWrap.className = 'progress-wrap';
+          progressWrap.hidden = true;
+          progressWrap.innerHTML = `<div class="progress-bar"><div class="progress-fill"></div></div><div class="row-status"></div>`;
+          const fill = progressWrap.querySelector('.progress-fill');
+          const rowStatus = progressWrap.querySelector('.row-status');
+
+          btn.addEventListener('click', async () => {
+            btn.disabled = true;
+            progressWrap.hidden = false;
+            rowStatus.className = 'row-status';
+            fill.style.width = '0%';
+
+            const setStatus = t => { rowStatus.textContent = t; };
+            const setProgress = p => { fill.style.width = (p * 100).toFixed(1) + '%'; };
+
+            try {
+              await ensureFFmpeg(setStatus);
+
+              setStatus('Downloading source video…');
+              const sourceBlob = await downloadFile(source.id, p => setProgress(p * 0.35));
+
+              setStatus('Downloading recording…');
+              const recBlob = await downloadFile(file.id, p => setProgress(0.35 + p * 0.2));
+
+              const recExt = file.name.split('.').pop() || 'webm';
+              const merged = await merge(
+                sourceBlob, recBlob, recExt, source.muteRegions,
+                p => setProgress(0.55 + p * 0.45),
+                setStatus
+              );
+
+              setStatus('Preparing download…');
+              const url = URL.createObjectURL(merged);
+              const a = Object.assign(document.createElement('a'), {
+                href: url,
+                download: `skit_${username}_${base}.mp4`
+              });
+              a.click();
+              setTimeout(() => URL.revokeObjectURL(url), 10000);
+
+              fill.style.width = '100%';
+              rowStatus.textContent = '✓ Downloaded!';
+              rowStatus.className = 'row-status done';
+              btn.textContent = 'Download Again';
+              btn.disabled = false;
+            } catch (err) {
+              rowStatus.textContent = 'Error: ' + err.message;
+              rowStatus.className = 'row-status fail';
+              btn.disabled = false;
+              console.error(err);
+            }
+          });
+
+          row.appendChild(userEl);
+          row.appendChild(fileEl);
+          row.appendChild(btn);
+          row.appendChild(progressWrap);
+          group.appendChild(row);
+        });
+
+        container.appendChild(group);
+      });
+    }
+
+    // ─── Init ─────────────────────────────────────────────
+    async function init() {
+      const statusEl = document.getElementById('page-status');
+      try {
+        statusEl.textContent = 'Finding Drive folders…';
+        const [sourceId, completeId] = await Promise.all([
+          findFolder('Omegle Source'),
+          findFolder('Omegle Complete')
+        ]);
+
+        statusEl.textContent = 'Loading file lists…';
+        const [sourceFiles, completeFiles] = await Promise.all([
+          listVideos(sourceId, 'files(id,name,mimeType,description)'),
+          listVideos(completeId, 'files(id,name,mimeType)')
+        ]);
+
+        const groups = buildGroups(sourceFiles, completeFiles);
+        const total = groups.reduce((n, g) => n + g.recordings.length, 0);
+        statusEl.textContent = `${groups.length} source video${groups.length !== 1 ? 's' : ''}, ${total} recording${total !== 1 ? 's' : ''} ready to merge.`;
+        render(groups, sourceFiles);
+      } catch (err) {
+        statusEl.innerHTML = `<span class="error">Error: ${err.message}</span>`;
+        console.error(err);
+      }
+    }
+
+    init();
+  </script>
+</body>
+</html>
