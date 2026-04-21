@@ -184,11 +184,12 @@
       ffmpeg = f;
     }
 
-    async function merge(sourceBlob, recBlob, recExt, muteRegions, onProgress, onStatus) {
+    async function merge(sourceBlob, recBlob, sourceName, recExt, muteRegions, onProgress, onStatus) {
       const { fetchFile } = await import('/js/ffmpeg-util/index.js');
 
+      const sourceExt = sourceName.includes('.') ? sourceName.split('.').pop() : 'mp4';
       onStatus('Writing files to FFmpeg…');
-      await ffmpeg.writeFile('source.mp4', await fetchFile(sourceBlob));
+      await ffmpeg.writeFile(`source.${sourceExt}`, await fetchFile(sourceBlob));
       await ffmpeg.writeFile(`rec.${recExt}`, await fetchFile(recBlob));
 
       const topH = 768, bottomH = 1152;
@@ -201,12 +202,16 @@
         ? `[0:a]volume='if(${muteRegions.map(r => `between(t,${r.start},${r.end})`).join('+')},0,1)':eval=frame[sa];[sa][1:a]amix=inputs=2:duration=shortest[a]`
         : `[0:a][1:a]amix=inputs=2:duration=shortest[a]`;
 
-      const handler = ({ progress }) => onProgress(Math.max(0, Math.min(1, progress)));
+      const handler = ({ progress }) => {
+        onProgress(Math.max(0, Math.min(1, progress)));
+        onStatus(`Merging… ${Math.round(progress * 100)}%`);
+      };
       ffmpeg.on('progress', handler);
-      onStatus('Merging video…');
+      ffmpeg.on('log', ({ message }) => console.log('[ffmpeg]', message));
 
-      const code = await ffmpeg.exec([
-        '-i', 'source.mp4', '-i', `rec.${recExt}`,
+      // Attempt 1: full merge with audio
+      let code = await ffmpeg.exec([
+        '-i', `source.${sourceExt}`, '-i', `rec.${recExt}`,
         '-filter_complex', videoFilter + ';' + audioFilter,
         '-map', '[v]', '-map', '[a]',
         '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23',
@@ -215,8 +220,40 @@
         '-y', 'output.mp4'
       ]);
 
+      // Attempt 2: recording audio only (source audio missing/incompatible)
+      if (code !== 0) {
+        onStatus('Retrying with recording audio only…');
+        code = await ffmpeg.exec([
+          '-i', `source.${sourceExt}`, '-i', `rec.${recExt}`,
+          '-filter_complex', videoFilter,
+          '-map', '[v]', '-map', '1:a',
+          '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23',
+          '-c:a', 'aac', '-b:a', '128k',
+          '-shortest', '-movflags', '+faststart',
+          '-y', 'output.mp4'
+        ]);
+      }
+
+      // Attempt 3: video only (no audio at all)
+      if (code !== 0) {
+        onStatus('Retrying with video only…');
+        code = await ffmpeg.exec([
+          '-i', `source.${sourceExt}`, '-i', `rec.${recExt}`,
+          '-filter_complex', videoFilter,
+          '-map', '[v]',
+          '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23',
+          '-shortest', '-movflags', '+faststart',
+          '-y', 'output.mp4'
+        ]);
+      }
+
       ffmpeg.off('progress', handler);
       if (code !== 0) throw new Error(`FFmpeg failed (exit code ${code})`);
+
+      const data = await ffmpeg.readFile('output.mp4');
+      await ffmpeg.deleteFile(`source.${sourceExt}`).catch(() => {});
+      await ffmpeg.deleteFile(`rec.${recExt}`).catch(() => {});
+      await ffmpeg.deleteFile('output.mp4').catch(() => {});
 
       const data = await ffmpeg.readFile('output.mp4');
       await ffmpeg.deleteFile('source.mp4').catch(() => {});
@@ -296,7 +333,7 @@
 
               const recExt = file.name.split('.').pop() || 'webm';
               const merged = await merge(
-                sourceBlob, recBlob, recExt, source.muteRegions,
+                sourceBlob, recBlob, source.name, recExt, source.muteRegions,
                 p => setProgress(0.55 + p * 0.45),
                 setStatus
               );
