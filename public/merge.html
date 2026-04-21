@@ -105,6 +105,55 @@
       return new Blob(chunks);
     }
 
+    async function uploadToDrive(blob, name, folderId, onProgress) {
+      const token = await getToken();
+      const mimeType = 'video/mp4';
+      const initRes = await fetch(`${DRIVE_API.replace('/v3', '')}/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          'X-Upload-Content-Type': mimeType,
+          'X-Upload-Content-Length': String(blob.size)
+        },
+        body: JSON.stringify({ name, parents: [folderId], mimeType })
+      });
+      if (!initRes.ok) throw new Error(`Upload init failed: ${initRes.status}`);
+      const uploadUrl = initRes.headers.get('Location');
+      if (!uploadUrl) throw new Error('No upload URL from Drive');
+      return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('PUT', uploadUrl);
+        xhr.setRequestHeader('Content-Type', mimeType);
+        xhr.upload.onprogress = e => { if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total); };
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) resolve(JSON.parse(xhr.responseText));
+          else reject(new Error(`Upload failed: ${xhr.status}`));
+        };
+        xhr.onerror = () => reject(new Error('Upload network error'));
+        xhr.send(blob);
+      });
+    }
+
+    async function findOrCreateFolder(name) {
+      const token = await getToken();
+      const params = new URLSearchParams({
+        q: `name='${name}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+        fields: 'files(id)', spaces: 'drive',
+        supportsAllDrives: 'true', includeItemsFromAllDrives: 'true'
+      });
+      const res = await fetch(`${DRIVE_API}/files?${params}`, { headers: { Authorization: `Bearer ${token}` } });
+      const data = await res.json();
+      if (data.files?.length) return data.files[0].id;
+      const createRes = await fetch(`${DRIVE_API}/files?supportsAllDrives=true`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, mimeType: 'application/vnd.google-apps.folder' })
+      });
+      if (!createRes.ok) throw new Error(`Failed to create folder: ${createRes.status}`);
+      return (await createRes.json()).id;
+    }
+
     // ─── Pair matching ────────────────────────────────────
     // Source:    videoname.mp4           (in Omegle Source)
     // Recording: raw_<user>_videoname.ext (in Omegle Complete)
@@ -338,19 +387,19 @@
                 setStatus
               );
 
-              setStatus('Preparing download…');
-              const url = URL.createObjectURL(merged);
-              const a = Object.assign(document.createElement('a'), {
-                href: url,
-                download: `skit_${username}_${base}.mp4`
+              const mergedName = `skit_${username}_${base}.mp4`;
+
+              setStatus('Uploading to Drive for captioning…');
+              const mergedFolderId = await findOrCreateFolder('Omegle Merged');
+              await uploadToDrive(merged, mergedName, mergedFolderId, p => {
+                setProgress(0.95 + p * 0.05);
+                setStatus(`Uploading… ${Math.round(p * 100)}%`);
               });
-              a.click();
-              setTimeout(() => URL.revokeObjectURL(url), 10000);
 
               fill.style.width = '100%';
-              rowStatus.textContent = '✓ Downloaded!';
+              rowStatus.textContent = '✓ Uploaded to Omegle Merged — captions will be added automatically';
               rowStatus.className = 'row-status done';
-              btn.textContent = 'Download Again';
+              btn.textContent = 'Merge Again';
               btn.disabled = false;
             } catch (err) {
               rowStatus.textContent = 'Error: ' + err.message;
