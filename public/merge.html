@@ -153,15 +153,32 @@
     // ─── FFmpeg ───────────────────────────────────────────
     let ffmpeg = null;
 
+    async function fetchWithProgress(url, mimeType, onStatus, label) {
+      const res = await fetch(url);
+      const total = parseInt(res.headers.get('content-length') || '0');
+      const reader = res.body.getReader();
+      const chunks = [];
+      let received = 0;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        received += value.length;
+        if (total) onStatus(`${label} ${Math.round(received / total * 100)}%…`);
+      }
+      const blob = new Blob(chunks, { type: mimeType });
+      return URL.createObjectURL(blob);
+    }
+
     async function ensureFFmpeg(onStatus) {
       if (ffmpeg) return;
-      onStatus('Downloading FFmpeg (~30MB, first time only)…');
+      onStatus('Loading FFmpeg library…');
       const { FFmpeg } = await import('https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/esm/index.js');
-      const { toBlobURL } = await import('https://unpkg.com/@ffmpeg/util@0.12.1/dist/esm/index.js');
       const base = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm';
       const f = new FFmpeg();
-      const coreURL = await toBlobURL(`${base}/ffmpeg-core.js`, 'text/javascript');
-      const wasmURL = await toBlobURL(`${base}/ffmpeg-core.wasm`, 'application/wasm');
+      const coreURL = await fetchWithProgress(`${base}/ffmpeg-core.js`, 'text/javascript', onStatus, 'Downloading FFmpeg core');
+      const wasmURL = await fetchWithProgress(`${base}/ffmpeg-core.wasm`, 'application/wasm', onStatus, 'Downloading FFmpeg WASM');
+      onStatus('Initializing FFmpeg…');
       await f.load({ coreURL, wasmURL });
       ffmpeg = f;
     }
