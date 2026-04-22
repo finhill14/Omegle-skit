@@ -34,7 +34,7 @@
 </head>
 <body>
   <h1>Skit Merger</h1>
-  <p class="subtitle">Merges Omegle Source videos with model recordings into 9:16 — desktop only</p>
+  <p class="subtitle">Downloads source + recording pairs from Drive — run <code>python captions/process.py</code> locally to merge, caption, and upload</p>
   <p id="page-status">Connecting to Drive…</p>
   <div id="pairs-container"></div>
 
@@ -86,11 +86,12 @@
       return data.files || [];
     }
 
-    async function downloadFile(fileId, onProgress) {
+    async function downloadBlob(fileId, onProgress) {
       const res = await fetch(`/api/video?id=${encodeURIComponent(fileId)}`);
       if (!res.ok) throw new Error(`Download failed: ${res.status}`);
+      const contentType = res.headers.get('content-type') || 'video/mp4';
       const contentLength = res.headers.get('content-length');
-      if (!contentLength || !res.body) return new Blob([await res.arrayBuffer()]);
+      if (!contentLength || !res.body) return new Blob([await res.arrayBuffer()], { type: contentType });
       const reader = res.body.getReader();
       const total = parseInt(contentLength);
       const chunks = [];
@@ -102,61 +103,17 @@
         received += value.length;
         if (onProgress) onProgress(received / total);
       }
-      return new Blob(chunks);
+      return new Blob(chunks, { type: contentType });
     }
 
-    async function uploadToDrive(blob, name, folderId, onProgress) {
-      const token = await getToken();
-      const mimeType = 'video/mp4';
-      const initRes = await fetch(`https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          'X-Upload-Content-Type': mimeType,
-          'X-Upload-Content-Length': String(blob.size)
-        },
-        body: JSON.stringify({ name, parents: [folderId], mimeType })
-      });
-      if (!initRes.ok) throw new Error(`Upload init failed: ${initRes.status}`);
-      const uploadUrl = initRes.headers.get('Location');
-      if (!uploadUrl) throw new Error('No upload URL from Drive');
-      return new Promise((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        xhr.open('PUT', uploadUrl);
-        xhr.setRequestHeader('Content-Type', mimeType);
-        xhr.upload.onprogress = e => { if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total); };
-        xhr.onload = () => {
-          if (xhr.status >= 200 && xhr.status < 300) resolve(JSON.parse(xhr.responseText));
-          else reject(new Error(`Upload failed: ${xhr.status}`));
-        };
-        xhr.onerror = () => reject(new Error('Upload network error'));
-        xhr.send(blob);
-      });
-    }
-
-    async function findOrCreateFolder(name) {
-      const token = await getToken();
-      const params = new URLSearchParams({
-        q: `name='${name}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
-        fields: 'files(id)', spaces: 'drive',
-        supportsAllDrives: 'true', includeItemsFromAllDrives: 'true'
-      });
-      const res = await fetch(`${DRIVE_API}/files?${params}`, { headers: { Authorization: `Bearer ${token}` } });
-      const data = await res.json();
-      if (data.files?.length) return data.files[0].id;
-      const createRes = await fetch(`${DRIVE_API}/files?supportsAllDrives=true`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, mimeType: 'application/vnd.google-apps.folder' })
-      });
-      if (!createRes.ok) throw new Error(`Failed to create folder: ${createRes.status}`);
-      return (await createRes.json()).id;
+    function triggerDownload(blob, filename) {
+      const url = URL.createObjectURL(blob);
+      const a = Object.assign(document.createElement('a'), { href: url, download: filename });
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
     }
 
     // ─── Pair matching ────────────────────────────────────
-    // Source:    videoname.mp4           (in Omegle Source)
-    // Recording: raw_<user>_videoname.ext (in Omegle Complete)
     function buildGroups(sourceFiles, completeFiles) {
       const sourceMap = new Map();
       sourceFiles.forEach(f => {
@@ -171,14 +128,13 @@
         sourceMap.set(base, { ...f, muteRegions });
       });
 
-      const groups = new Map(); // sourceBase -> { source, recordings[] }
+      const groups = new Map();
 
       for (const f of completeFiles) {
         if (!f.name.startsWith('raw_')) continue;
         const withoutExt = f.name.replace(/\.[^.]+$/, '');
-        const withoutRaw = withoutExt.slice(4); // strip 'raw_'
+        const withoutRaw = withoutExt.slice(4);
 
-        // Match against all source basenames (handles usernames containing underscores)
         let source = null, username = null;
         for (const [base, src] of sourceMap) {
           if (withoutRaw === base) {
@@ -199,99 +155,6 @@
       return [...groups.values()];
     }
 
-    // ─── FFmpeg ───────────────────────────────────────────
-    let ffmpeg = null;
-
-    async function fetchAsBlobURL(url, mimeType, onStatus, label) {
-      const res = await fetch(url);
-      const total = parseInt(res.headers.get('content-length') || '0');
-      const reader = res.body.getReader();
-      const chunks = [];
-      let received = 0;
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        chunks.push(value);
-        received += value.length;
-        if (total) onStatus(`${label} ${Math.round(received / total * 100)}%…`);
-      }
-      return URL.createObjectURL(new Blob(chunks, { type: mimeType }));
-    }
-
-    async function ensureFFmpeg(onStatus) {
-      if (ffmpeg) return;
-      onStatus('Loading FFmpeg library…');
-      const { FFmpeg } = await import('/js/ffmpeg/index.js');
-      const f = new FFmpeg();
-      const coreURL = '/js/ffmpeg-core/ffmpeg-core.js';
-      const wasmURL = await fetchAsBlobURL(
-        'https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm/ffmpeg-core.wasm',
-        'application/wasm', onStatus, 'Downloading FFmpeg WASM'
-      );
-      onStatus('Initializing FFmpeg…');
-      await f.load({ coreURL, wasmURL });
-      ffmpeg = f;
-    }
-
-    async function merge(sourceBlob, recBlob, sourceName, recExt, muteRegions, onProgress, onStatus) {
-      const { fetchFile } = await import('/js/ffmpeg-util/index.js');
-
-      const sourceExt = sourceName.includes('.') ? sourceName.split('.').pop() : 'mp4';
-      onStatus('Writing source file…');
-      await ffmpeg.writeFile(`source.${sourceExt}`, await fetchFile(sourceBlob));
-      onStatus('Writing recording file…');
-      await ffmpeg.writeFile(`rec.${recExt}`, await fetchFile(recBlob));
-
-      const topH = 768, bottomH = 1152;
-      const videoFilter =
-        `[0:v]scale=1080:${topH}:force_original_aspect_ratio=increase,crop=1080:${topH},setsar=1[top];` +
-        `[1:v]scale=1080:${bottomH}:force_original_aspect_ratio=increase,crop=1080:${bottomH},setsar=1[bottom];` +
-        `[top][bottom]vstack=inputs=2[v]`;
-
-      const handler = ({ progress }) => {
-        onProgress(Math.max(0, Math.min(1, progress)));
-        onStatus(`Merging… ${Math.round(progress * 100)}%`);
-      };
-      ffmpeg.on('progress', handler);
-      ffmpeg.on('log', ({ message }) => console.log('[ffmpeg]', message));
-
-      onStatus('Merging (this may take a few minutes)…');
-
-      // Start with simplest: video stack + recording audio only
-      let code = await ffmpeg.exec([
-        '-i', `source.${sourceExt}`, '-i', `rec.${recExt}`,
-        '-filter_complex', videoFilter,
-        '-map', '[v]', '-map', '1:a',
-        '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28',
-        '-c:a', 'aac', '-b:a', '128k',
-        '-shortest', '-movflags', '+faststart',
-        '-y', 'output.mp4'
-      ]);
-
-      // Fallback: video only (no audio)
-      if (code !== 0) {
-        onStatus('Retrying without audio…');
-        code = await ffmpeg.exec([
-          '-i', `source.${sourceExt}`, '-i', `rec.${recExt}`,
-          '-filter_complex', videoFilter,
-          '-map', '[v]',
-          '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28',
-          '-shortest', '-movflags', '+faststart',
-          '-y', 'output.mp4'
-        ]);
-      }
-
-      ffmpeg.off('progress', handler);
-      if (code !== 0) throw new Error(`FFmpeg failed (exit code ${code})`);
-
-      const data = await ffmpeg.readFile('output.mp4');
-      await ffmpeg.deleteFile(`source.${sourceExt}`).catch(() => {});
-      await ffmpeg.deleteFile(`rec.${recExt}`).catch(() => {});
-      await ffmpeg.deleteFile('output.mp4').catch(() => {});
-
-      return new Blob([data], { type: 'video/mp4' });
-    }
-
     // ─── Render ───────────────────────────────────────────
     function render(groups, sourceFiles) {
       const container = document.getElementById('pairs-container');
@@ -301,7 +164,6 @@
         return;
       }
 
-      // Source number index based on original sorted order
       const sourceIndex = new Map(sourceFiles.map((f, i) => [f.name.replace(/\.[^.]+$/, ''), i + 1]));
 
       container.innerHTML = '';
@@ -333,7 +195,7 @@
 
           const btn = document.createElement('button');
           btn.className = 'btn btn-green';
-          btn.textContent = 'Merge & Download';
+          btn.textContent = 'Download Pair';
 
           const progressWrap = document.createElement('div');
           progressWrap.className = 'progress-wrap';
@@ -349,37 +211,27 @@
             fill.style.width = '0%';
 
             const setStatus = t => { rowStatus.textContent = t; };
-            const setProgress = p => { fill.style.width = (p * 100).toFixed(1) + '%'; };
 
             try {
-              await ensureFFmpeg(setStatus);
-
               setStatus('Downloading source video…');
-              const sourceBlob = await downloadFile(source.id, p => setProgress(p * 0.35));
-
-              setStatus('Downloading recording…');
-              const recBlob = await downloadFile(file.id, p => setProgress(0.35 + p * 0.2));
-
-              const recExt = file.name.split('.').pop() || 'webm';
-              const merged = await merge(
-                sourceBlob, recBlob, source.name, recExt, source.muteRegions,
-                p => setProgress(0.55 + p * 0.45),
-                setStatus
-              );
-
-              const mergedName = `skit_${username}_${base}.mp4`;
-
-              setStatus('Uploading to Drive for captioning…');
-              const mergedFolderId = await findOrCreateFolder('Omegle Merged');
-              await uploadToDrive(merged, mergedName, mergedFolderId, p => {
-                setProgress(0.95 + p * 0.05);
-                setStatus(`Uploading… ${Math.round(p * 100)}%`);
+              const sourceBlob = await downloadBlob(source.id, p => {
+                fill.style.width = (p * 45).toFixed(1) + '%';
               });
 
+              setStatus('Downloading recording…');
+              const recBlob = await downloadBlob(file.id, p => {
+                fill.style.width = (45 + p * 45).toFixed(1) + '%';
+              });
+
+              setStatus('Saving files…');
+              triggerDownload(sourceBlob, `source_${base}.${source.name.split('.').pop()}`);
+              await new Promise(r => setTimeout(r, 500));
+              triggerDownload(recBlob, file.name);
+
               fill.style.width = '100%';
-              rowStatus.textContent = '✓ Uploaded to Omegle Merged — captions will be added automatically';
+              rowStatus.textContent = '✓ Both files downloaded — run process.py to merge + caption';
               rowStatus.className = 'row-status done';
-              btn.textContent = 'Merge Again';
+              btn.textContent = 'Download Again';
               btn.disabled = false;
             } catch (err) {
               rowStatus.textContent = 'Error: ' + err.message;
@@ -418,7 +270,7 @@
 
         const groups = buildGroups(sourceFiles, completeFiles);
         const total = groups.reduce((n, g) => n + g.recordings.length, 0);
-        statusEl.textContent = `${groups.length} source video${groups.length !== 1 ? 's' : ''}, ${total} recording${total !== 1 ? 's' : ''} ready to merge.`;
+        statusEl.textContent = `${groups.length} source video${groups.length !== 1 ? 's' : ''}, ${total} recording${total !== 1 ? 's' : ''} ready.`;
         render(groups, sourceFiles);
       } catch (err) {
         statusEl.innerHTML = `<span class="error">Error: ${err.message}</span>`;
