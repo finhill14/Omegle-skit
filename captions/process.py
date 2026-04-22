@@ -185,14 +185,15 @@ def match_pairs(source_files, complete_files):
 
         matched_source = None
         username = None
+        best_len = 0
         for base, src in source_map.items():
-            if without_raw == base:
+            if without_raw == base and len(base) > best_len:
                 matched_source, username = src, ""
-            elif without_raw.endswith("_" + base):
+                best_len = len(base)
+            elif without_raw.endswith("_" + base) and len(base) > best_len:
                 matched_source = src
                 username = without_raw[: len(without_raw) - len(base) - 1]
-            if matched_source:
-                break
+                best_len = len(base)
 
         if matched_source:
             pairs.append({
