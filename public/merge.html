@@ -214,6 +214,9 @@
 
             try {
               setStatus('Downloading source video…');
+              const sourceExt = source.name.split('.').pop();
+              const sourceName = `source_${base}.${sourceExt}`;
+              const recName = file.name;
               const sourceBlob = await downloadBlob(source.id, p => {
                 fill.style.width = (p * 45).toFixed(1) + '%';
               });
@@ -224,12 +227,23 @@
               });
 
               setStatus('Saving files…');
-              triggerDownload(sourceBlob, `source_${base}.${source.name.split('.').pop()}`);
+
+              // Save manifest JSON with mute regions
+              const manifest = {
+                source: sourceName,
+                recording: recName,
+                muteRegions: source.muteRegions || []
+              };
+              const manifestName = `skit_${username}_${base}.json`;
+              triggerDownload(new Blob([JSON.stringify(manifest, null, 2)], { type: 'application/json' }), manifestName);
+              await new Promise(r => setTimeout(r, 300));
+
+              triggerDownload(sourceBlob, sourceName);
               await new Promise(r => setTimeout(r, 500));
-              triggerDownload(recBlob, file.name);
+              triggerDownload(recBlob, recName);
 
               fill.style.width = '100%';
-              rowStatus.textContent = '✓ Both files downloaded — run process.py to merge + caption';
+              rowStatus.textContent = `✓ Downloaded — run: python process.py ${manifestName}`;
               rowStatus.className = 'row-status done';
               btn.textContent = 'Download Again';
               btn.disabled = false;
