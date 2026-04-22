@@ -205,13 +205,16 @@ def match_pairs(source_files, complete_files):
 
 
 # ─── Local mode ────────────────────────────────────────────
-def run_local(source_path, recording_path, output):
+def run_local(source_path, recording_path, output, mute_regions=None):
     base = os.path.splitext(os.path.basename(source_path))[0]
     merged_path = os.path.join(SCRIPT_DIR, f"_merged_{base}.mp4")
     final_path = output or os.path.splitext(source_path)[0] + "_final.mp4"
 
-    print(f"Merging: {source_path} + {recording_path}")
-    if not merge_videos(source_path, recording_path, merged_path):
+    if mute_regions:
+        print(f"Merging: {source_path} + {recording_path} ({len(mute_regions)} mute regions)")
+    else:
+        print(f"Merging: {source_path} + {recording_path}")
+    if not merge_videos(source_path, recording_path, merged_path, mute_regions):
         sys.exit(1)
 
     print(f"Captioning: {merged_path}")
@@ -232,6 +235,27 @@ def run_local(source_path, recording_path, output):
         os.unlink(ass_path)
 
     print(f"\nDone: {final_path}")
+
+
+def run_manifest(manifest_path):
+    with open(manifest_path) as f:
+        manifest = json.load(f)
+
+    manifest_dir = os.path.dirname(os.path.abspath(manifest_path))
+    source_path = os.path.join(manifest_dir, manifest["source"])
+    recording_path = os.path.join(manifest_dir, manifest["recording"])
+    mute_regions = manifest.get("muteRegions", [])
+
+    if not os.path.isfile(source_path):
+        print(f"Source not found: {source_path}")
+        sys.exit(1)
+    if not os.path.isfile(recording_path):
+        print(f"Recording not found: {recording_path}")
+        sys.exit(1)
+
+    base = os.path.splitext(os.path.basename(manifest_path))[0]
+    output = os.path.join(manifest_dir, f"{base}_captioned.mp4")
+    run_local(source_path, recording_path, output, mute_regions)
 
 
 # ─── Drive mode ────────────────────────────────────────────
@@ -325,7 +349,7 @@ def run_drive():
 # ─── Main ─────────────────────────────────────────────────
 def main():
     parser = argparse.ArgumentParser(description="Merge + caption omegle skit videos")
-    parser.add_argument("source", nargs="?", help="Source video file (local mode)")
+    parser.add_argument("source", nargs="?", help="Source video or manifest .json file")
     parser.add_argument("recording", nargs="?", help="Recording video file (local mode)")
     parser.add_argument("-o", "--output", help="Output path (local mode)")
     parser.add_argument("--drive", action="store_true",
@@ -334,14 +358,16 @@ def main():
 
     if args.drive:
         run_drive()
+    elif args.source and args.source.endswith(".json"):
+        run_manifest(args.source)
     elif args.source and args.recording:
         run_local(args.source, args.recording, args.output)
     else:
         parser.print_help()
         print("\nExamples:")
-        print("  python process.py source.mp4 recording.mp4")
-        print("  python process.py source.mp4 recording.mp4 -o output.mp4")
-        print("  python process.py --drive")
+        print("  python process.py skit_ally_video.json          # from merge page download")
+        print("  python process.py source.mp4 recording.mp4      # two files directly")
+        print("  python process.py --drive                       # full Drive pipeline")
 
 
 if __name__ == "__main__":
