@@ -259,6 +259,32 @@ def run_manifest(manifest_path):
     run_local(source_path, recording_path, output, mute_regions)
 
 
+# ─── Folder mode ───────────────────────────────────────────
+def run_folder(folder_path):
+    """Process every manifest .json found in folder_path."""
+    import glob
+    manifests = sorted(glob.glob(os.path.join(folder_path, '*.json')))
+    if not manifests:
+        print(f"No .json manifests found in: {folder_path}")
+        sys.exit(1)
+
+    print(f"Found {len(manifests)} manifest(s) in {folder_path}\n")
+    failures = 0
+    for mp in manifests:
+        print(f"{'=' * 60}")
+        print(f"Processing: {os.path.basename(mp)}")
+        try:
+            run_manifest(mp)
+        except SystemExit as e:
+            if e.code != 0:
+                failures += 1
+
+    print(f"\n{'=' * 60}")
+    print(f"Finished — {len(manifests) - failures}/{len(manifests)} succeeded")
+    if failures:
+        sys.exit(1)
+
+
 # ─── Drive mode ────────────────────────────────────────────
 def run_drive():
     token = get_token()
@@ -359,6 +385,8 @@ def main():
 
     if args.drive:
         run_drive()
+    elif args.source and os.path.isdir(args.source):
+        run_folder(args.source)
     elif args.source and args.source.endswith(".json"):
         run_manifest(args.source)
     elif args.source and args.recording:
@@ -366,9 +394,10 @@ def main():
     else:
         parser.print_help()
         print("\nExamples:")
-        print("  python process.py skit_ally_video.json          # from merge page download")
-        print("  python process.py source.mp4 recording.mp4      # two files directly")
-        print("  python process.py --drive                       # full Drive pipeline")
+        print("  python3 process.py captions/skit_ally_video/    # folder from merge page zip")
+        print("  python3 process.py skit_ally_video.json         # single manifest")
+        print("  python3 process.py source.mp4 recording.mp4     # two files directly")
+        print("  python3 process.py --drive                      # full Drive pipeline")
 
 
 if __name__ == "__main__":
