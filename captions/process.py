@@ -26,6 +26,9 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 # ─── FFmpeg merge ──────────────────────────────────────────
+REC_BOOST = 2.0  # multiply recording (model) audio volume; 2.0 = +6 dB
+
+
 def merge_videos(source_path, recording_path, output_path, mute_regions=None):
     top_h, bottom_h = 768, 1152
     video_filter = (
@@ -40,10 +43,14 @@ def merge_videos(source_path, recording_path, output_path, mute_regions=None):
         expr = "+".join(f"between(t,{r['start']},{r['end']})" for r in mute_regions)
         audio_filter = (
             f"[0:a]volume='if({expr},0,1)':eval=frame[sa];"
-            f"[sa][1:a]amix=inputs=2:duration=shortest[a]"
+            f"[1:a]volume={REC_BOOST}[ra];"
+            f"[sa][ra]amix=inputs=2:duration=shortest[a]"
         )
     else:
-        audio_filter = "[0:a][1:a]amix=inputs=2:duration=shortest[a]"
+        audio_filter = (
+            f"[1:a]volume={REC_BOOST}[ra];"
+            f"[0:a][ra]amix=inputs=2:duration=shortest[a]"
+        )
 
     # Attempt 1: full merge with both audio tracks
     cmd = [
@@ -60,11 +67,11 @@ def merge_videos(source_path, recording_path, output_path, mute_regions=None):
     if result.returncode == 0:
         return True
 
-    # Attempt 2: recording audio only
+    # Attempt 2: recording audio only (boosted)
     cmd2 = [
         "ffmpeg", "-y", "-i", source_path, "-i", recording_path,
-        "-filter_complex", video_filter,
-        "-map", "[v]", "-map", "1:a",
+        "-filter_complex", video_filter + f";[1:a]volume={REC_BOOST}[ra]",
+        "-map", "[v]", "-map", "[ra]",
         "-c:v", "libx264", "-preset", "fast", "-crf", "20",
         "-c:a", "aac", "-b:a", "128k",
         "-shortest", "-movflags", "+faststart",
