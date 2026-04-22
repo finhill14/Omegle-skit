@@ -54,8 +54,8 @@ def process_zip(zip_path: pathlib.Path) -> None:
             names = zf.namelist()
             folder_name = names[0].split("/")[0]
             zf.extractall(SCRIPT_DIR)
-    except zipfile.BadZipFile as e:
-        print(f"  Bad zip: {e}")
+    except (zipfile.BadZipFile, OSError) as e:
+        print(f"  Could not open zip: {e}")
         return
 
     folder_path = SCRIPT_DIR / folder_name
@@ -98,7 +98,7 @@ def main():
     print("Press Ctrl+C to stop.\n")
 
     # Seed with already-existing zips so we don't reprocess them
-    seen: set[str] = {p.name for p in DOWNLOADS.glob("skit_*.zip")}
+    seen = {p.name for p in DOWNLOADS.glob("skit_*.zip")}
     if seen:
         print(f"  (ignoring {len(seen)} existing zip(s) already in Downloads)\n")
 

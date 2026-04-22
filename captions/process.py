@@ -278,6 +278,9 @@ def run_folder(folder_path):
         except SystemExit as e:
             if e.code != 0:
                 failures += 1
+        except Exception as e:
+            print(f"  Error: {e}")
+            failures += 1
 
     print(f"\n{'=' * 60}")
     print(f"Finished — {len(manifests) - failures}/{len(manifests)} succeeded")
