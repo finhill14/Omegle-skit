@@ -29,7 +29,7 @@ HIGHLIGHT_COLORS = {
     "green":  "&H0000FF00",   # lime green — classic TikTok style
     "yellow": "&H0000FFFF",   # yellow
     "cyan":   "&H00FFFF00",   # cyan
-    "pink":   "&H00FF69B4",   # hot pink
+    "pink":   "&H00B469FF",   # hot pink
 }
 
 WHITE  = "&H00FFFFFF"
@@ -83,7 +83,7 @@ def install_font(font_path: str) -> str:
     return re.sub(r"[-_](Bold|Italic|Regular|Medium|Black|Heavy|Light).*", "", name, flags=re.I)
 
 
-def build_ass(segments, highlight_color: str, font_name: str, font_size: int, style: str = "extrude") -> str:
+def build_ass(segments, highlight_color: str, font_name: str, font_size: int, style: str = "extrude", res_x: int = 1080, res_y: int = 1920) -> str:
     """
     Convert Whisper word-timestamp segments into an ASS file where the
     current word is shown in highlight_color; the rest of the line is white.
@@ -111,8 +111,8 @@ def build_ass(segments, highlight_color: str, font_name: str, font_size: int, st
     header = (
         "[Script Info]\n"
         "ScriptType: v4.00+\n"
-        "PlayResX: 1920\n"
-        "PlayResY: 1080\n"
+        f"PlayResX: {res_x}\n"
+        f"PlayResY: {res_y}\n"
         "WrapStyle: 1\n\n"
         "[V4+ Styles]\n"
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
@@ -206,7 +206,7 @@ def main():
     parser.add_argument("--font",     "-f",    default=None,
                         help="Path to a .ttf font file. Montserrat Bold is auto-downloaded if omitted.")
     parser.add_argument("--font-size",         type=int, default=48,
-                        help="Caption font size (default: 28)")
+                        help="Caption font size (default: 48)")
     parser.add_argument("--language", "-l",    default=None,
                         help="Language hint e.g. 'en', 'es', 'fr' (auto-detected if omitted)")
     parser.add_argument("--no-burn",           action="store_true",
@@ -264,8 +264,23 @@ def main():
     segments = result["segments"]
     print(f"✅  Transcription done — {len(segments)} segments")
 
+    # ── Detect video resolution ─────────────────────────────────────────────
+    res_x, res_y = 1080, 1920
+    try:
+        probe = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=width,height", "-of", "csv=p=0",
+             args.input],
+            capture_output=True, text=True
+        )
+        if probe.returncode == 0 and "," in probe.stdout.strip():
+            w, h = probe.stdout.strip().split(",")[:2]
+            res_x, res_y = int(w), int(h)
+    except Exception:
+        pass
+
     # ── Generate ASS ─────────────────────────────────────────────────────────
-    ass_content = build_ass(segments, args.highlight, font_name, args.font_size, args.style)
+    ass_content = build_ass(segments, args.highlight, font_name, args.font_size, args.style, res_x, res_y)
     with open(ass_path, "w", encoding="utf-8") as f:
         f.write(ass_content)
     print(f"✅  Subtitle file → {ass_path}")

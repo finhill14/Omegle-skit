@@ -135,15 +135,15 @@
         const withoutExt = f.name.replace(/\.[^.]+$/, '');
         const withoutRaw = withoutExt.slice(4);
 
-        let source = null, username = null;
+        let source = null, username = null, bestLen = 0;
         for (const [base, src] of sourceMap) {
-          if (withoutRaw === base) {
-            source = src; username = '';
-          } else if (withoutRaw.endsWith('_' + base)) {
+          if (withoutRaw === base && base.length > bestLen) {
+            source = src; username = ''; bestLen = base.length;
+          } else if (withoutRaw.endsWith('_' + base) && base.length > bestLen) {
             source = src;
             username = withoutRaw.slice(0, withoutRaw.length - base.length - 1);
+            bestLen = base.length;
           }
-          if (source) break;
         }
         if (!source) continue;
 
@@ -243,7 +243,7 @@
               triggerDownload(recBlob, recName);
 
               fill.style.width = '100%';
-              rowStatus.textContent = `✓ Downloaded — run: python process.py ${manifestName}`;
+              rowStatus.textContent = `✓ Downloaded — run: python captions/process.py ${manifestName}`;
               rowStatus.className = 'row-status done';
               btn.textContent = 'Download Again';
               btn.disabled = false;
@@ -287,7 +287,8 @@
         statusEl.textContent = `${groups.length} source video${groups.length !== 1 ? 's' : ''}, ${total} recording${total !== 1 ? 's' : ''} ready.`;
         render(groups, sourceFiles);
       } catch (err) {
-        statusEl.innerHTML = `<span class="error">Error: ${err.message}</span>`;
+        statusEl.textContent = 'Error: ' + err.message;
+        statusEl.style.color = '#ef5350';
         console.error(err);
       }
     }
