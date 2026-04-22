@@ -128,6 +128,10 @@ def build_ass(segments, highlight_color: str, font_name: str, font_size: int, st
     events = []
     PHRASE_MAX = 5  # max words shown on screen at once
 
+    # Pin captions slightly above the video's vertical center — 47% down from top.
+    # With Style Alignment=5 (middle-center), \pos(x,y) anchors the text center at (x,y).
+    pos = "{\\pos(" + str(res_x // 2) + "," + str(int(res_y * 0.47)) + ")}"
+
     for seg in segments:
         words = seg.get("words", [])
 
@@ -137,7 +141,7 @@ def build_ass(segments, highlight_color: str, font_name: str, font_size: int, st
             text = "\\N".join(textwrap.wrap(text, 40))
             events.append(
                 f"Dialogue: 0,{ts(seg['start'])},{ts(seg['end'])},"
-                f"Default,,0,0,0,,{text}"
+                f"Default,,0,0,0,,{pos}{text}"
             )
             continue
 
@@ -162,7 +166,7 @@ def build_ass(segments, highlight_color: str, font_name: str, font_size: int, st
 
                 events.append(
                     f"Dialogue: 0,{ts(word_start)},{ts(word_end)},"
-                    f"Default,,0,0,0,," + " ".join(parts)
+                    f"Default,,0,0,0,,{pos}" + " ".join(parts)
                 )
 
     return header + "\n".join(events) + "\n"
@@ -205,8 +209,8 @@ def main():
                              "'box' = opaque background box (original look)")
     parser.add_argument("--font",     "-f",    default=None,
                         help="Path to a .ttf font file. Montserrat Bold is auto-downloaded if omitted.")
-    parser.add_argument("--font-size",         type=int, default=48,
-                        help="Caption font size (default: 48)")
+    parser.add_argument("--font-size",         type=int, default=56,
+                        help="Caption font size (default: 56)")
     parser.add_argument("--language", "-l",    default=None,
                         help="Language hint e.g. 'en', 'es', 'fr' (auto-detected if omitted)")
     parser.add_argument("--no-burn",           action="store_true",

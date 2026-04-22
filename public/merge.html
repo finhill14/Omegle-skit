@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Skit Merger</title>
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0a0a0a; color: #fff; padding: 1.5rem; max-width: 860px; margin: 0 auto; }
@@ -34,7 +35,7 @@
 </head>
 <body>
   <h1>Skit Merger</h1>
-  <p class="subtitle">Downloads source + recording pairs from Drive — run <code>python captions/process.py</code> locally to merge, caption, and upload</p>
+  <p class="subtitle">Run <code>python3 captions/watch.py</code> once — it auto-processes every zip you download. Or manually: extract zip into <code>captions/</code> and run <code>python3 captions/process.py captions/&lt;folder&gt;</code></p>
   <p id="page-status">Connecting to Drive…</p>
   <div id="pairs-container"></div>
 
@@ -211,39 +212,46 @@
             fill.style.width = '0%';
 
             const setStatus = t => { rowStatus.textContent = t; };
+            const folderName = `skit_${username}_${base}`;
 
             try {
-              setStatus('Downloading source video…');
               const sourceExt = source.name.split('.').pop();
               const sourceName = `source_${base}.${sourceExt}`;
               const recName = file.name;
+
+              setStatus('Downloading source video…');
               const sourceBlob = await downloadBlob(source.id, p => {
-                fill.style.width = (p * 45).toFixed(1) + '%';
+                fill.style.width = (p * 40).toFixed(1) + '%';
               });
 
               setStatus('Downloading recording…');
               const recBlob = await downloadBlob(file.id, p => {
-                fill.style.width = (45 + p * 45).toFixed(1) + '%';
+                fill.style.width = (40 + p * 40).toFixed(1) + '%';
               });
 
-              setStatus('Saving files…');
-
-              // Save manifest JSON with mute regions
+              setStatus('Building zip…');
               const manifest = {
                 source: sourceName,
                 recording: recName,
                 muteRegions: source.muteRegions || []
               };
               const manifestName = `skit_${username}_${base}.json`;
-              triggerDownload(new Blob([JSON.stringify(manifest, null, 2)], { type: 'application/json' }), manifestName);
-              await new Promise(r => setTimeout(r, 300));
 
-              triggerDownload(sourceBlob, sourceName);
-              await new Promise(r => setTimeout(r, 500));
-              triggerDownload(recBlob, recName);
+              const zip = new JSZip();
+              const folder = zip.folder(folderName);
+              folder.file(manifestName, JSON.stringify(manifest, null, 2));
+              folder.file(sourceName, sourceBlob);
+              folder.file(recName, recBlob);
+
+              const zipBlob = await zip.generateAsync(
+                { type: 'blob', compression: 'STORE' },
+                meta => { fill.style.width = (80 + meta.percent * 0.18).toFixed(1) + '%'; }
+              );
+
+              triggerDownload(zipBlob, `${folderName}.zip`);
 
               fill.style.width = '100%';
-              rowStatus.textContent = `✓ Downloaded — run: python captions/process.py ${manifestName}`;
+              rowStatus.textContent = `✓ Extract zip into captions/ then: python3 captions/process.py captions/${folderName}`;
               rowStatus.className = 'row-status done';
               btn.textContent = 'Download Again';
               btn.disabled = false;

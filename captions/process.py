@@ -26,6 +26,9 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 # ─── FFmpeg merge ──────────────────────────────────────────
+REC_BOOST = 2.0  # multiply recording (model) audio volume; 2.0 = +6 dB
+
+
 def merge_videos(source_path, recording_path, output_path, mute_regions=None):
     top_h, bottom_h = 768, 1152
     video_filter = (
@@ -40,10 +43,14 @@ def merge_videos(source_path, recording_path, output_path, mute_regions=None):
         expr = "+".join(f"between(t,{r['start']},{r['end']})" for r in mute_regions)
         audio_filter = (
             f"[0:a]volume='if({expr},0,1)':eval=frame[sa];"
-            f"[sa][1:a]amix=inputs=2:duration=shortest[a]"
+            f"[1:a]volume={REC_BOOST}[ra];"
+            f"[sa][ra]amix=inputs=2:duration=shortest[a]"
         )
     else:
-        audio_filter = "[0:a][1:a]amix=inputs=2:duration=shortest[a]"
+        audio_filter = (
+            f"[1:a]volume={REC_BOOST}[ra];"
+            f"[0:a][ra]amix=inputs=2:duration=shortest[a]"
+        )
 
     # Attempt 1: full merge with both audio tracks
     cmd = [
@@ -60,11 +67,11 @@ def merge_videos(source_path, recording_path, output_path, mute_regions=None):
     if result.returncode == 0:
         return True
 
-    # Attempt 2: recording audio only
+    # Attempt 2: recording audio only (boosted)
     cmd2 = [
         "ffmpeg", "-y", "-i", source_path, "-i", recording_path,
-        "-filter_complex", video_filter,
-        "-map", "[v]", "-map", "1:a",
+        "-filter_complex", video_filter + f";[1:a]volume={REC_BOOST}[ra]",
+        "-map", "[v]", "-map", "[ra]",
         "-c:v", "libx264", "-preset", "fast", "-crf", "20",
         "-c:a", "aac", "-b:a", "128k",
         "-shortest", "-movflags", "+faststart",
@@ -259,6 +266,35 @@ def run_manifest(manifest_path):
     run_local(source_path, recording_path, output, mute_regions)
 
 
+# ─── Folder mode ───────────────────────────────────────────
+def run_folder(folder_path):
+    """Process every manifest .json found in folder_path."""
+    import glob
+    manifests = sorted(glob.glob(os.path.join(folder_path, '*.json')))
+    if not manifests:
+        print(f"No .json manifests found in: {folder_path}")
+        sys.exit(1)
+
+    print(f"Found {len(manifests)} manifest(s) in {folder_path}\n")
+    failures = 0
+    for mp in manifests:
+        print(f"{'=' * 60}")
+        print(f"Processing: {os.path.basename(mp)}")
+        try:
+            run_manifest(mp)
+        except SystemExit as e:
+            if e.code != 0:
+                failures += 1
+        except Exception as e:
+            print(f"  Error: {e}")
+            failures += 1
+
+    print(f"\n{'=' * 60}")
+    print(f"Finished — {len(manifests) - failures}/{len(manifests)} succeeded")
+    if failures:
+        sys.exit(1)
+
+
 # ─── Drive mode ────────────────────────────────────────────
 def run_drive():
     token = get_token()
@@ -359,6 +395,8 @@ def main():
 
     if args.drive:
         run_drive()
+    elif args.source and os.path.isdir(args.source):
+        run_folder(args.source)
     elif args.source and args.source.endswith(".json"):
         run_manifest(args.source)
     elif args.source and args.recording:
@@ -366,9 +404,10 @@ def main():
     else:
         parser.print_help()
         print("\nExamples:")
-        print("  python process.py skit_ally_video.json          # from merge page download")
-        print("  python process.py source.mp4 recording.mp4      # two files directly")
-        print("  python process.py --drive                       # full Drive pipeline")
+        print("  python3 process.py captions/skit_ally_video/    # folder from merge page zip")
+        print("  python3 process.py skit_ally_video.json         # single manifest")
+        print("  python3 process.py source.mp4 recording.mp4     # two files directly")
+        print("  python3 process.py --drive                      # full Drive pipeline")
 
 
 if __name__ == "__main__":
