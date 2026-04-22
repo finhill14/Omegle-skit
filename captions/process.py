@@ -265,6 +265,14 @@ def run_manifest(manifest_path):
     output = os.path.join(manifest_dir, f"{base}_captioned.mp4")
     run_local(source_path, recording_path, output, mute_regions)
 
+    # run_local only returns on success — safe to delete inputs now
+    for p in [source_path, recording_path, manifest_path]:
+        try:
+            os.unlink(p)
+        except OSError:
+            pass
+    print("  Cleaned up source files.")
+
 
 # ─── Folder mode ───────────────────────────────────────────
 def run_folder(folder_path):
