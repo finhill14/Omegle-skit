@@ -22,6 +22,8 @@
     .btn:disabled { opacity: 0.4; cursor: not-allowed; }
     .btn-green { background: #43a047; }
     .btn-green:hover:not(:disabled) { background: #66bb6a; }
+    .btn-done { background: #1565c0; }
+    .btn-done:hover:not(:disabled) { background: #1976d2; }
     .progress-wrap { width: 100%; margin-top: 0.35rem; }
     .progress-bar { height: 4px; background: #222; border-radius: 2px; overflow: hidden; }
     .progress-fill { height: 100%; background: #4fc3f7; border-radius: 2px; width: 0; transition: width 0.15s; }
@@ -105,6 +107,15 @@
         if (onProgress) onProgress(received / total);
       }
       return new Blob(chunks, { type: contentType });
+    }
+
+    async function deleteFile(fileId) {
+      const token = await getToken();
+      const res = await fetch(
+        `${DRIVE_API}/files/${encodeURIComponent(fileId)}?supportsAllDrives=true`,
+        { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (!res.ok && res.status !== 204) throw new Error(`Delete failed: ${res.status}`);
     }
 
     function triggerDownload(blob, filename) {
@@ -263,9 +274,32 @@
             }
           });
 
+          const doneBtn = document.createElement('button');
+          doneBtn.className = 'btn btn-done';
+          doneBtn.textContent = 'Mark Finished';
+          doneBtn.addEventListener('click', async () => {
+            if (!confirm(`Delete "${file.name}" from Omegle Complete?`)) return;
+            doneBtn.disabled = true;
+            doneBtn.textContent = 'Deleting…';
+            try {
+              await deleteFile(file.id);
+              row.style.transition = 'opacity 0.25s';
+              row.style.opacity = '0';
+              setTimeout(() => {
+                row.remove();
+                if (!group.querySelector('.recording-row')) group.remove();
+              }, 260);
+            } catch (err) {
+              doneBtn.disabled = false;
+              doneBtn.textContent = 'Error — retry';
+              console.error(err);
+            }
+          });
+
           row.appendChild(userEl);
           row.appendChild(fileEl);
           row.appendChild(btn);
+          row.appendChild(doneBtn);
           row.appendChild(progressWrap);
           group.appendChild(row);
         });

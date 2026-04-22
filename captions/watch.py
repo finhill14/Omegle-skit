@@ -72,20 +72,24 @@ def process_zip(zip_path: pathlib.Path) -> None:
         cwd=str(SCRIPT_DIR.parent),
     )
 
-    # Move zip into captions/ regardless of success, to avoid reprocessing
-    dest = SCRIPT_DIR / zip_path.name
-    try:
-        zip_path.rename(dest)
-        print(f"\n  Zip moved → captions/{zip_path.name}")
-    except Exception:
-        pass  # already moved or on different filesystem — fine
-
     if result.returncode == 0:
-        # Print where to find the output
+        # Success — delete zip entirely
+        try:
+            zip_path.unlink()
+            print(f"\n  Zip deleted.")
+        except OSError:
+            pass
         captioned = list(folder_path.glob("*_captioned.mp4"))
         if captioned:
             print(f"  Output: {captioned[0].relative_to(SCRIPT_DIR.parent)}")
     else:
+        # Failed — move zip to captions/ so it can be inspected / retried
+        dest = SCRIPT_DIR / zip_path.name
+        try:
+            zip_path.rename(dest)
+            print(f"\n  Zip kept → captions/{zip_path.name} (processing failed)")
+        except Exception:
+            pass
         print(f"  process.py exited with code {result.returncode}")
 
 
