@@ -223,6 +223,9 @@ def run_local(source_path, recording_path, output, mute_regions=None):
     else:
         print(f"Merging: {source_path} + {recording_path}")
     if not merge_videos(source_path, recording_path, merged_path, mute_regions):
+        print(f"\n  Emergency save — raw clips preserved unedited:")
+        print(f"    {source_path}")
+        print(f"    {recording_path}")
         sys.exit(1)
 
     print(f"Captioning: {merged_path}")
@@ -234,6 +237,10 @@ def run_local(source_path, recording_path, output, mute_regions=None):
     print(result.stdout)
     if result.returncode != 0:
         print(result.stderr, file=sys.stderr)
+        print(f"\n  Caption failed — merged video preserved: {merged_path}")
+        print(f"  Raw clips also preserved:")
+        print(f"    {source_path}")
+        print(f"    {recording_path}")
         sys.exit(result.returncode)
 
     # Clean up intermediate
