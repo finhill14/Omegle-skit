@@ -59,6 +59,8 @@
   <script type="module">
     const DRIVE_API = 'https://www.googleapis.com/drive/v3';
 
+    let _completeId = null, _finishedId = null;
+
     // ─── Auth ─────────────────────────────────────────────
     let _token = null, _tokenExpiry = 0;
 
@@ -124,13 +126,29 @@
       return new Blob(chunks, { type: contentType });
     }
 
-    async function deleteFile(fileId) {
+    async function moveToFinished(fileId) {
       const token = await getToken();
+      const params = new URLSearchParams({
+        addParents: _finishedId,
+        removeParents: _completeId,
+        supportsAllDrives: 'true'
+      });
       const res = await fetch(
-        `${DRIVE_API}/files/${encodeURIComponent(fileId)}?supportsAllDrives=true`,
-        { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } }
+        `${DRIVE_API}/files/${encodeURIComponent(fileId)}?${params}`,
+        { method: 'PATCH', headers: { Authorization: `Bearer ${token}` } }
       );
-      if (!res.ok && res.status !== 204) throw new Error(`Delete failed: ${res.status}`);
+      if (!res.ok) throw new Error(`Move failed: ${res.status}`);
+    }
+
+    async function createDriveFolder(name) {
+      const token = await getToken();
+      const res = await fetch(`${DRIVE_API}/files?supportsAllDrives=true`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, mimeType: 'application/vnd.google-apps.folder' })
+      });
+      if (!res.ok) throw new Error(`Create folder failed: ${res.status}`);
+      return (await res.json()).id;
     }
 
     function triggerDownload(blob, filename) {
@@ -199,22 +217,36 @@
         });
       });
 
-      // Count finished (in Omegle Finished) — parse skit_username_base_captioned.ext
+      // Count finished (in Omegle Finished)
+      // Matches both raw_username_base.ext (moved by Mark Finished)
+      // and skit_username_base_captioned.ext (uploaded by process.py --drive)
       const doneMap = new Map();
+      const doneSeen = new Set();
       for (const f of finishedFiles) {
-        if (!f.name.startsWith('skit_')) continue;
-        const rest = f.name.replace(/\.[^.]+$/, '').replace(/_captioned$/, '').slice(5);
-        let username = null, bestLen = 0;
+        let rest, prefix;
+        if (f.name.startsWith('raw_')) {
+          rest = f.name.replace(/\.[^.]+$/, '').slice(4);
+          prefix = 'raw';
+        } else if (f.name.startsWith('skit_')) {
+          rest = f.name.replace(/\.[^.]+$/, '').replace(/_captioned$/, '').slice(5);
+          prefix = 'skit';
+        } else continue;
+
+        let username = null, matchedBase = null, bestLen = 0;
         for (const base of sourceNames) {
-          if (rest === base && base.length > bestLen) { username = ''; bestLen = base.length; }
+          if (rest === base && base.length > bestLen) { username = ''; matchedBase = base; bestLen = base.length; }
           else if (rest.endsWith('_' + base) && base.length > bestLen) {
             username = rest.slice(0, rest.length - base.length - 1);
-            bestLen = base.length;
+            matchedBase = base; bestLen = base.length;
           }
         }
         if (username !== null) {
           const name = username || '(unknown)';
-          doneMap.set(name, (doneMap.get(name) || 0) + 1);
+          const key = `${name}::${matchedBase}`;
+          if (!doneSeen.has(key)) {
+            doneSeen.add(key);
+            doneMap.set(name, (doneMap.get(name) || 0) + 1);
+          }
         }
       }
 
@@ -386,11 +418,11 @@
           doneBtn.className = 'btn btn-done';
           doneBtn.textContent = 'Mark Finished';
           doneBtn.addEventListener('click', async () => {
-            if (!confirm(`Delete "${file.name}" from Omegle Complete?`)) return;
+            if (!confirm(`Mark "${username}" as finished for this video?`)) return;
             doneBtn.disabled = true;
-            doneBtn.textContent = 'Deleting…';
+            doneBtn.textContent = 'Moving…';
             try {
-              await deleteFile(file.id);
+              await moveToFinished(file.id);
               row.style.transition = 'opacity 0.25s';
               row.style.opacity = '0';
               setTimeout(() => {
@@ -425,19 +457,17 @@
           findFolder('Omegle Source'),
           findFolder('Omegle Complete')
         ]);
-        let finishedId = null;
-        try { finishedId = await findFolder('Omegle Finished'); } catch {}
+        _completeId = completeId;
+        try { _finishedId = await findFolder('Omegle Finished'); } catch {
+          _finishedId = await createDriveFolder('Omegle Finished');
+        }
 
         statusEl.textContent = 'Loading file lists…';
-        const fetches = [
+        const [sourceFiles, completeFiles, finishedFiles] = await Promise.all([
           listVideos(sourceId, 'files(id,name,mimeType,description)'),
-          listVideos(completeId, 'files(id,name,mimeType)')
-        ];
-        if (finishedId) fetches.push(listVideos(finishedId, 'files(id,name,mimeType)'));
-        const results = await Promise.all(fetches);
-        const sourceFiles = results[0];
-        const completeFiles = results[1];
-        const finishedFiles = results[2] || [];
+          listVideos(completeId, 'files(id,name,mimeType)'),
+          listVideos(_finishedId, 'files(id,name,mimeType)')
+        ]);
 
         const groups = buildGroups(sourceFiles, completeFiles);
         const total = groups.reduce((n, g) => n + g.recordings.length, 0);
