@@ -33,12 +33,22 @@
     .empty { color: #555; font-size: 0.9rem; text-align: center; padding: 3rem 1rem; }
     .badge { font-size: 0.7rem; background: #1e3a2e; color: #43a047; border-radius: 4px; padding: 0.1rem 0.4rem; margin-left: 0.5rem; vertical-align: middle; }
     .badge-muted { background: #2a1e2e; color: #ce93d8; }
+    #model-progress { margin-bottom: 1.25rem; }
+    .model-section { background: #111; border: 1px solid #222; border-radius: 8px; padding: 1rem; }
+    .model-row { display: flex; align-items: center; gap: 0.75rem; padding: 0.35rem 0; }
+    .model-name { color: #4fc3f7; font-weight: 600; min-width: 100px; font-size: 0.9rem; }
+    .model-bar-bg { flex: 1; height: 6px; background: #222; border-radius: 3px; overflow: hidden; }
+    .model-bar-fill { height: 100%; background: #43a047; border-radius: 3px; transition: width 0.3s; }
+    .model-bar-fill.full { background: #66bb6a; }
+    .model-count { color: #888; font-size: 0.82rem; min-width: 45px; text-align: right; }
+    .model-count.full { color: #43a047; }
   </style>
 </head>
 <body>
   <h1>Skit Merger</h1>
   <p class="subtitle">Run <code>python3 captions/watch.py</code> once — it auto-processes every zip you download. Or manually: extract zip into <code>captions/</code> and run <code>python3 captions/process.py captions/&lt;folder&gt;</code></p>
   <p id="page-status">Connecting to Drive…</p>
+  <div id="model-progress"></div>
   <div id="pairs-container"></div>
 
   <script type="module">
@@ -165,6 +175,61 @@
       }
 
       return [...groups.values()];
+    }
+
+    // ─── Model progress ─────────────────────────────────────
+    function renderModelProgress(groups, totalSources) {
+      const container = document.getElementById('model-progress');
+      container.innerHTML = '';
+
+      const counts = new Map();
+      groups.forEach(g => {
+        g.recordings.forEach(r => {
+          counts.set(r.username, (counts.get(r.username) || 0) + 1);
+        });
+      });
+
+      if (counts.size === 0) return;
+
+      const section = document.createElement('div');
+      section.className = 'model-section';
+
+      const title = document.createElement('div');
+      title.className = 'source-title';
+      title.textContent = 'Model Progress';
+      title.style.marginBottom = '0.4rem';
+      section.appendChild(title);
+
+      [...counts.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .forEach(([name, count]) => {
+          const pct = totalSources > 0 ? Math.min(100, Math.round((count / totalSources) * 100)) : 0;
+          const isFull = count >= totalSources;
+          const row = document.createElement('div');
+          row.className = 'model-row';
+
+          const nameEl = document.createElement('span');
+          nameEl.className = 'model-name';
+          nameEl.textContent = name;
+
+          const barBg = document.createElement('div');
+          barBg.className = 'model-bar-bg';
+          const barFill = document.createElement('div');
+          barFill.className = 'model-bar-fill' + (isFull ? ' full' : '');
+          barFill.style.width = pct + '%';
+          barBg.appendChild(barFill);
+
+          const countEl = document.createElement('span');
+          countEl.className = 'model-count' + (isFull ? ' full' : '');
+          countEl.textContent = `${count}/${totalSources}`;
+
+          row.appendChild(nameEl);
+          row.appendChild(barBg);
+          row.appendChild(countEl);
+          section.appendChild(row);
+        });
+
+      container.appendChild(section);
     }
 
     // ─── Render ───────────────────────────────────────────
@@ -327,6 +392,7 @@
         const groups = buildGroups(sourceFiles, completeFiles);
         const total = groups.reduce((n, g) => n + g.recordings.length, 0);
         statusEl.textContent = `${groups.length} source video${groups.length !== 1 ? 's' : ''}, ${total} recording${total !== 1 ? 's' : ''} ready.`;
+        renderModelProgress(groups, sourceFiles.length);
         render(groups, sourceFiles);
       } catch (err) {
         statusEl.textContent = 'Error: ' + err.message;
