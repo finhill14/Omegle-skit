@@ -813,6 +813,32 @@ $('btn-preview-lines').addEventListener('click', async () => {
   }
 });
 
+$('btn-download-clip').addEventListener('click', async () => {
+  const video = state.allVideos[state.currentIndex];
+  const fileId = state.originalMap[video.name] || video.id;
+  const btn = $('btn-download-clip');
+  btn.disabled = true;
+  btn.textContent = 'Downloading…';
+  try {
+    const blob = await downloadFile(fileId, p => {
+      btn.textContent = `Downloading… ${Math.round(p * 100)}%`;
+    });
+    const url = URL.createObjectURL(blob);
+    const a = Object.assign(document.createElement('a'), {
+      href: url,
+      download: `Video_${state.currentIndex + 1}.mp4`
+    });
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    btn.textContent = 'Downloaded';
+    setTimeout(() => { btn.textContent = 'Download Clip'; }, 2000);
+  } catch (err) {
+    alert('Download failed: ' + err.message);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 $('btn-start-record').addEventListener('click', () => {
   cleanupPreview();
   loadCurrentVideo();
@@ -821,6 +847,12 @@ $('btn-start-record').addEventListener('click', () => {
 $('btn-options-back').addEventListener('click', () => {
   cleanupPreview();
   goTo('screen-select');
+});
+
+$('btn-mirror').addEventListener('click', () => {
+  const el = $('webcam-preview');
+  const isMirrored = el.style.transform !== 'scaleX(1)';
+  el.style.transform = isMirrored ? 'scaleX(1)' : '';
 });
 
 async function loadCurrentVideo() {
