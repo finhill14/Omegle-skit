@@ -37,16 +37,10 @@
     .model-section { background: #111; border: 1px solid #222; border-radius: 8px; padding: 1rem; }
     .model-row { display: flex; align-items: center; gap: 0.75rem; padding: 0.35rem 0; }
     .model-name { color: #4fc3f7; font-weight: 600; min-width: 100px; font-size: 0.9rem; }
-    .model-bar-bg { flex: 1; height: 6px; background: #222; border-radius: 3px; overflow: hidden; display: flex; }
-    .model-bar-done { height: 100%; background: #43a047; transition: width 0.3s; }
-    .model-bar-pending { height: 100%; background: #4fc3f7; transition: width 0.3s; }
+    .model-bar-bg { flex: 1; height: 6px; background: #222; border-radius: 3px; overflow: hidden; }
+    .model-bar-done { height: 100%; background: #43a047; border-radius: 3px; transition: width 0.3s; }
     .model-count { color: #888; font-size: 0.82rem; min-width: 45px; text-align: right; }
     .model-count.full { color: #43a047; }
-    .model-legend { font-size: 0.72rem; color: #555; margin-top: 0.4rem; }
-    .model-legend span { margin-right: 0.8rem; }
-    .dot { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 3px; vertical-align: middle; }
-    .dot-done { background: #43a047; }
-    .dot-pending { background: #4fc3f7; }
   </style>
 </head>
 <body>
@@ -58,6 +52,8 @@
 
   <script type="module">
     const DRIVE_API = 'https://www.googleapis.com/drive/v3';
+
+    let _completeId = null, _finishedId = null;
 
     // ─── Auth ─────────────────────────────────────────────
     let _token = null, _tokenExpiry = 0;
@@ -124,13 +120,44 @@
       return new Blob(chunks, { type: contentType });
     }
 
-    async function deleteFile(fileId) {
+    async function moveToFinished(fileId) {
       const token = await getToken();
+      const params = new URLSearchParams({
+        addParents: _finishedId,
+        removeParents: _completeId,
+        supportsAllDrives: 'true'
+      });
       const res = await fetch(
-        `${DRIVE_API}/files/${encodeURIComponent(fileId)}?supportsAllDrives=true`,
-        { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } }
+        `${DRIVE_API}/files/${encodeURIComponent(fileId)}?${params}`,
+        { method: 'PATCH', headers: { Authorization: `Bearer ${token}` } }
       );
-      if (!res.ok && res.status !== 204) throw new Error(`Delete failed: ${res.status}`);
+      if (!res.ok) throw new Error(`Move failed: ${res.status}`);
+    }
+
+    async function loadAllProgress() {
+      const token = await getToken();
+      const params = new URLSearchParams({
+        q: "name='omegle-progress.json' and trashed=false",
+        fields: 'files(id)',
+        spaces: 'drive'
+      });
+      const res = await fetch(`${DRIVE_API}/files?${params}`, { headers: { Authorization: `Bearer ${token}` } });
+      const data = await res.json();
+      if (!data.files?.length) return {};
+      const fileRes = await fetch(`${DRIVE_API}/files/${data.files[0].id}?alt=media`, { headers: { Authorization: `Bearer ${token}` } });
+      if (!fileRes.ok) return {};
+      try { return await fileRes.json(); } catch { return {}; }
+    }
+
+    async function createDriveFolder(name) {
+      const token = await getToken();
+      const res = await fetch(`${DRIVE_API}/files?supportsAllDrives=true`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, mimeType: 'application/vnd.google-apps.folder' })
+      });
+      if (!res.ok) throw new Error(`Create folder failed: ${res.status}`);
+      return (await res.json()).id;
     }
 
     function triggerDownload(blob, filename) {
@@ -183,43 +210,13 @@
     }
 
     // ─── Model progress ─────────────────────────────────────
-    function renderModelProgress(groups, sourceFiles, finishedFiles) {
+    function renderModelProgress(progressData, totalSources) {
       const container = document.getElementById('model-progress');
       container.innerHTML = '';
-      const totalSources = sourceFiles.length;
       if (totalSources === 0) return;
 
-      const sourceNames = new Set(sourceFiles.map(f => f.name.replace(/\.[^.]+$/, '')));
-
-      // Count pending (in Omegle Complete)
-      const pendingMap = new Map();
-      groups.forEach(g => {
-        g.recordings.forEach(r => {
-          pendingMap.set(r.username, (pendingMap.get(r.username) || 0) + 1);
-        });
-      });
-
-      // Count finished (in Omegle Finished) — parse skit_username_base_captioned.ext
-      const doneMap = new Map();
-      for (const f of finishedFiles) {
-        if (!f.name.startsWith('skit_')) continue;
-        const rest = f.name.replace(/\.[^.]+$/, '').replace(/_captioned$/, '').slice(5);
-        let username = null, bestLen = 0;
-        for (const base of sourceNames) {
-          if (rest === base && base.length > bestLen) { username = ''; bestLen = base.length; }
-          else if (rest.endsWith('_' + base) && base.length > bestLen) {
-            username = rest.slice(0, rest.length - base.length - 1);
-            bestLen = base.length;
-          }
-        }
-        if (username !== null) {
-          const name = username || '(unknown)';
-          doneMap.set(name, (doneMap.get(name) || 0) + 1);
-        }
-      }
-
-      const allUsers = new Set([...pendingMap.keys(), ...doneMap.keys()]);
-      if (allUsers.size === 0) return;
+      const entries = Object.entries(progressData).filter(([, ids]) => ids.length > 0);
+      if (entries.length === 0) return;
 
       const section = document.createElement('div');
       section.className = 'model-section';
@@ -230,14 +227,12 @@
       title.style.marginBottom = '0.4rem';
       section.appendChild(title);
 
-      [...allUsers]
-        .map(name => ({ name, done: doneMap.get(name) || 0, pend: pendingMap.get(name) || 0 }))
-        .sort((a, b) => (b.done + b.pend) - (a.done + a.pend))
-        .forEach(({ name, done, pend }) => {
-          const total = done + pend;
-          const donePct = Math.min(100, Math.round((done / totalSources) * 100));
-          const pendPct = Math.min(100 - donePct, Math.round((pend / totalSources) * 100));
-          const isFull = total >= totalSources;
+      entries
+        .sort((a, b) => b[1].length - a[1].length)
+        .forEach(([name, ids]) => {
+          const count = ids.length;
+          const pct = Math.min(100, Math.round((count / totalSources) * 100));
+          const isFull = count >= totalSources;
 
           const row = document.createElement('div');
           row.className = 'model-row';
@@ -248,29 +243,20 @@
 
           const barBg = document.createElement('div');
           barBg.className = 'model-bar-bg';
-          const doneBar = document.createElement('div');
-          doneBar.className = 'model-bar-done';
-          doneBar.style.width = donePct + '%';
-          const pendBar = document.createElement('div');
-          pendBar.className = 'model-bar-pending';
-          pendBar.style.width = pendPct + '%';
-          barBg.appendChild(doneBar);
-          barBg.appendChild(pendBar);
+          const barFill = document.createElement('div');
+          barFill.className = 'model-bar-done';
+          barFill.style.width = pct + '%';
+          barBg.appendChild(barFill);
 
           const countEl = document.createElement('span');
           countEl.className = 'model-count' + (isFull ? ' full' : '');
-          countEl.textContent = `${total}/${totalSources}`;
+          countEl.textContent = `${count}/${totalSources}`;
 
           row.appendChild(nameEl);
           row.appendChild(barBg);
           row.appendChild(countEl);
           section.appendChild(row);
         });
-
-      const legend = document.createElement('div');
-      legend.className = 'model-legend';
-      legend.innerHTML = '<span><span class="dot dot-done"></span>processed</span><span><span class="dot dot-pending"></span>pending</span>';
-      section.appendChild(legend);
 
       container.appendChild(section);
     }
@@ -386,11 +372,11 @@
           doneBtn.className = 'btn btn-done';
           doneBtn.textContent = 'Mark Finished';
           doneBtn.addEventListener('click', async () => {
-            if (!confirm(`Delete "${file.name}" from Omegle Complete?`)) return;
+            if (!confirm(`Mark "${username}" as finished for this video?`)) return;
             doneBtn.disabled = true;
-            doneBtn.textContent = 'Deleting…';
+            doneBtn.textContent = 'Moving…';
             try {
-              await deleteFile(file.id);
+              await moveToFinished(file.id);
               row.style.transition = 'opacity 0.25s';
               row.style.opacity = '0';
               setTimeout(() => {
@@ -425,24 +411,22 @@
           findFolder('Omegle Source'),
           findFolder('Omegle Complete')
         ]);
-        let finishedId = null;
-        try { finishedId = await findFolder('Omegle Finished'); } catch {}
+        _completeId = completeId;
+        try { _finishedId = await findFolder('Omegle Finished'); } catch {
+          _finishedId = await createDriveFolder('Omegle Finished');
+        }
 
         statusEl.textContent = 'Loading file lists…';
-        const fetches = [
+        const [sourceFiles, completeFiles, progressData] = await Promise.all([
           listVideos(sourceId, 'files(id,name,mimeType,description)'),
-          listVideos(completeId, 'files(id,name,mimeType)')
-        ];
-        if (finishedId) fetches.push(listVideos(finishedId, 'files(id,name,mimeType)'));
-        const results = await Promise.all(fetches);
-        const sourceFiles = results[0];
-        const completeFiles = results[1];
-        const finishedFiles = results[2] || [];
+          listVideos(completeId, 'files(id,name,mimeType)'),
+          loadAllProgress()
+        ]);
 
         const groups = buildGroups(sourceFiles, completeFiles);
         const total = groups.reduce((n, g) => n + g.recordings.length, 0);
         statusEl.textContent = `${groups.length} source video${groups.length !== 1 ? 's' : ''}, ${total} recording${total !== 1 ? 's' : ''} ready.`;
-        renderModelProgress(groups, sourceFiles, finishedFiles);
+        renderModelProgress(progressData, sourceFiles.length);
         render(groups, sourceFiles);
       } catch (err) {
         statusEl.textContent = 'Error: ' + err.message;
