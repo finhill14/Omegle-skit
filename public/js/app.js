@@ -317,6 +317,39 @@ let mediaRecorder = null;
 let recordedChunks = [];
 let timerInterval = null;
 let isRecording = false;
+let mirrorState = true;
+let _mirrorCanvas = null, _mirrorCtx = null, _mirrorAnim = null, _mirrorVideo = null;
+
+function createMirroredStream() {
+  const vTrack = webcamStream.getVideoTracks()[0];
+  const s = vTrack.getSettings();
+  _mirrorCanvas = document.createElement('canvas');
+  _mirrorCanvas.width = s.width || 640;
+  _mirrorCanvas.height = s.height || 480;
+  _mirrorCtx = _mirrorCanvas.getContext('2d');
+  _mirrorVideo = document.createElement('video');
+  _mirrorVideo.srcObject = new MediaStream([vTrack]);
+  _mirrorVideo.muted = true;
+  _mirrorVideo.playsInline = true;
+  _mirrorVideo.play();
+  function draw() {
+    _mirrorCtx.save();
+    _mirrorCtx.scale(-1, 1);
+    _mirrorCtx.drawImage(_mirrorVideo, -_mirrorCanvas.width, 0, _mirrorCanvas.width, _mirrorCanvas.height);
+    _mirrorCtx.restore();
+    _mirrorAnim = requestAnimationFrame(draw);
+  }
+  draw();
+  const stream = _mirrorCanvas.captureStream(30);
+  webcamStream.getAudioTracks().forEach(t => stream.addTrack(t));
+  return stream;
+}
+
+function stopMirroredStream() {
+  if (_mirrorAnim) { cancelAnimationFrame(_mirrorAnim); _mirrorAnim = null; }
+  if (_mirrorVideo) { _mirrorVideo.pause(); _mirrorVideo.srcObject = null; _mirrorVideo = null; }
+  _mirrorCanvas = null; _mirrorCtx = null;
+}
 
 function getMimeType() {
   const types = [
@@ -352,7 +385,8 @@ function startRecording() {
   const mimeType = getMimeType();
   state.webcamMime = mimeType || 'video/webm';
 
-  mediaRecorder = new MediaRecorder(webcamStream, {
+  const recordStream = mirrorState ? createMirroredStream() : webcamStream;
+  mediaRecorder = new MediaRecorder(recordStream, {
     mimeType: mimeType || undefined,
     videoBitsPerSecond: 2500000
   });
@@ -395,6 +429,7 @@ function startRecording() {
 
 function stopRecording() {
   if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
+  stopMirroredStream();
   prerecordedVideo.pause();
   prerecordedVideo.muted = false;
   isRecording = false;
@@ -850,9 +885,8 @@ $('btn-options-back').addEventListener('click', () => {
 });
 
 $('btn-mirror').addEventListener('click', () => {
-  const el = $('webcam-preview');
-  const isMirrored = el.style.transform !== 'scaleX(1)';
-  el.style.transform = isMirrored ? 'scaleX(1)' : '';
+  mirrorState = !mirrorState;
+  $('webcam-preview').style.transform = mirrorState ? '' : 'scaleX(1)';
 });
 
 async function loadCurrentVideo() {
