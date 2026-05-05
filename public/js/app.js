@@ -331,7 +331,7 @@ function createMirroredStream() {
   _mirrorVideo.srcObject = new MediaStream([vTrack]);
   _mirrorVideo.muted = true;
   _mirrorVideo.playsInline = true;
-  _mirrorVideo.play();
+  _mirrorVideo.play().catch(() => {});
   function draw() {
     _mirrorCtx.save();
     _mirrorCtx.scale(-1, 1);
@@ -869,6 +869,7 @@ $('btn-download-clip').addEventListener('click', async () => {
     setTimeout(() => { btn.textContent = 'Download Clip'; }, 2000);
   } catch (err) {
     alert('Download failed: ' + err.message);
+    btn.textContent = 'Download Clip';
   } finally {
     btn.disabled = false;
   }
