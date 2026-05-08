@@ -101,7 +101,11 @@
     }
 
     async function downloadBlob(fileId, onProgress) {
-      const res = await fetch(`/api/video?id=${encodeURIComponent(fileId)}`);
+      const token = await getToken();
+      const res = await fetch(
+        `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media&supportsAllDrives=true`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
       if (!res.ok) throw new Error(`Download failed: ${res.status}`);
       const contentType = res.headers.get('content-type') || 'video/mp4';
       const contentLength = res.headers.get('content-length');
