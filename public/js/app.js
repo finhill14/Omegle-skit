@@ -145,12 +145,27 @@ async function listVideos(folderId) {
   return data.files || [];
 }
 
+let _driveToken = null, _driveTokenExpiry = 0;
+
+async function getDriveToken() {
+  if (_driveToken && _driveTokenExpiry > Date.now()) return _driveToken;
+  const res = await fetch('/api/auth/refresh');
+  if (!res.ok) throw new Error('Drive auth failed');
+  const data = await res.json();
+  if (!data.access_token) throw new Error('No access token');
+  _driveToken = data.access_token;
+  _driveTokenExpiry = Date.now() + ((data.expires_in || 3600) - 60) * 1000;
+  return _driveToken;
+}
+
 async function downloadFile(fileId, onProgress) {
-  const res = await fetch(`/api/video?id=${encodeURIComponent(fileId)}`);
+  const token = await getDriveToken();
+  const res = await fetch(
+    `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media&supportsAllDrives=true`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
   if (!res.ok) {
-    let body = '';
-    try { body = await res.text(); } catch {}
-    throw new Error(`Download failed: ${res.status} — ${body.slice(0, 200)}`);
+    throw new Error(`Download failed: ${res.status}`);
   }
 
   const contentType = res.headers.get('content-type') || 'video/mp4';
