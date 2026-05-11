@@ -933,13 +933,15 @@ $('upload-file-input').addEventListener('change', async (e) => {
   state.trimStart = 0;
 
   const video = state.allVideos[state.currentIndex];
-  if (!state.currentVideoBlob) {
+  if (!state.currentVideoBlob || state._cachedVideoId !== video.id) {
     const btn = $('btn-upload-version');
     btn.disabled = true;
     btn.textContent = 'Loading source…';
     try {
+      if (state.currentVideoUrl) URL.revokeObjectURL(state.currentVideoUrl);
       state.currentVideoBlob = await downloadFile(video.id);
       state.currentVideoUrl = URL.createObjectURL(state.currentVideoBlob);
+      state._cachedVideoId = video.id;
     } catch (err) {
       alert('Failed to load source video: ' + err.message);
       btn.disabled = false;
@@ -975,15 +977,23 @@ $('trim-offset').addEventListener('input', () => {
 $('btn-play-sync').addEventListener('click', () => {
   const src = $('trim-source');
   const upl = $('trim-upload');
+  if (!src.paused || !upl.paused) {
+    src.pause();
+    upl.pause();
+    $('btn-play-sync').textContent = 'Play Sync';
+    return;
+  }
   src.currentTime = 0;
   upl.currentTime = state.trimStart || 0;
   src.play().catch(() => {});
   upl.play().catch(() => {});
+  $('btn-play-sync').textContent = 'Stop';
 });
 
 $('btn-confirm-trim').addEventListener('click', () => {
   $('trim-source').pause();
   $('trim-upload').pause();
+  $('btn-play-sync').textContent = 'Play Sync';
   if (state.webcamUrl) URL.revokeObjectURL(state.webcamUrl);
   state.webcamUrl = state.uploadedUrl;
   initPreview();
@@ -993,6 +1003,7 @@ $('btn-confirm-trim').addEventListener('click', () => {
 $('btn-trim-back').addEventListener('click', () => {
   $('trim-source').pause();
   $('trim-upload').pause();
+  $('btn-play-sync').textContent = 'Play Sync';
   if (state.uploadedUrl) { URL.revokeObjectURL(state.uploadedUrl); state.uploadedUrl = null; }
   state.webcamBlob = null;
   state.trimStart = 0;
