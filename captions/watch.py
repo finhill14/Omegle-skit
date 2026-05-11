@@ -19,9 +19,12 @@ import zipfile
 import subprocess
 import pathlib
 
+import argparse
+
 SCRIPT_DIR = pathlib.Path(__file__).parent.resolve()
 DOWNLOADS  = pathlib.Path.home() / "Downloads"
 POLL       = 3   # seconds between scans
+NO_MUTE    = False
 
 
 def wait_stable(path: pathlib.Path, stable_secs: float = 1.5) -> None:
@@ -67,10 +70,10 @@ def process_zip(zip_path: pathlib.Path) -> None:
 
     # Run process.py
     print(f"  Running process.py …\n")
-    result = subprocess.run(
-        [sys.executable, str(SCRIPT_DIR / "process.py"), str(folder_path)],
-        cwd=str(SCRIPT_DIR.parent),
-    )
+    cmd = [sys.executable, str(SCRIPT_DIR / "process.py"), str(folder_path)]
+    if NO_MUTE:
+        cmd.append("--no-mute")
+    result = subprocess.run(cmd, cwd=str(SCRIPT_DIR.parent))
 
     if result.returncode == 0:
         # Success — delete zip entirely
@@ -94,11 +97,18 @@ def process_zip(zip_path: pathlib.Path) -> None:
 
 
 def main():
+    global NO_MUTE
+    parser = argparse.ArgumentParser(description="Watch Downloads for skit zips and auto-process")
+    parser.add_argument("--no-mute", action="store_true", help="Skip mute regions (full source audio)")
+    args = parser.parse_args()
+    NO_MUTE = args.no_mute
+
     if not DOWNLOADS.exists():
         print(f"Downloads folder not found: {DOWNLOADS}")
         sys.exit(1)
 
-    print(f"Watching {DOWNLOADS} for skit_*.zip …")
+    label = "Watching" + (" (--no-mute)" if NO_MUTE else "")
+    print(f"{label} {DOWNLOADS} for skit_*.zip …")
     print("Press Ctrl+C to stop.\n")
 
     # Seed with already-existing zips so we don't reprocess them

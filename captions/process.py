@@ -309,14 +309,14 @@ def run_local(source_path, recording_path, output, mute_regions=None, trim_start
     print(f"\nDone: {final_path}")
 
 
-def run_manifest(manifest_path):
+def run_manifest(manifest_path, no_mute=False):
     with open(manifest_path) as f:
         manifest = json.load(f)
 
     manifest_dir = os.path.dirname(os.path.abspath(manifest_path))
     source_path = os.path.join(manifest_dir, manifest["source"])
     recording_path = os.path.join(manifest_dir, manifest["recording"])
-    mute_regions = manifest.get("muteRegions", [])
+    mute_regions = [] if no_mute else manifest.get("muteRegions", [])
     trim_start = manifest.get("trimStart", 0)
 
     if not os.path.isfile(source_path):
@@ -340,7 +340,7 @@ def run_manifest(manifest_path):
 
 
 # ─── Folder mode ───────────────────────────────────────────
-def run_folder(folder_path):
+def run_folder(folder_path, no_mute=False):
     """Process every manifest .json found in folder_path."""
     import glob
     manifests = sorted(glob.glob(os.path.join(folder_path, '*.json')))
@@ -354,7 +354,7 @@ def run_folder(folder_path):
         print(f"{'=' * 60}")
         print(f"Processing: {os.path.basename(mp)}")
         try:
-            run_manifest(mp)
+            run_manifest(mp, no_mute=no_mute)
         except SystemExit as e:
             if e.code != 0:
                 failures += 1
@@ -369,7 +369,7 @@ def run_folder(folder_path):
 
 
 # ─── Drive mode ────────────────────────────────────────────
-def run_drive():
+def run_drive(no_mute=False):
     token = get_token()
 
     source_id = find_folder(token, "Omegle Source")
@@ -415,7 +415,8 @@ def run_drive():
             print("  Downloading recording…")
             download_file(token, rec["id"], rec_path)
 
-            if not merge_videos(src_path, rec_path, merged_path, src.get("muteRegions"), trim_start):
+            mute = [] if no_mute else src.get("muteRegions")
+            if not merge_videos(src_path, rec_path, merged_path, mute, trim_start):
                 failures += 1
                 continue
 
@@ -465,14 +466,16 @@ def main():
     parser.add_argument("-o", "--output", help="Output path (local mode)")
     parser.add_argument("--drive", action="store_true",
                         help="Process all pairs from Google Drive")
+    parser.add_argument("--no-mute", action="store_true",
+                        help="Ignore mute regions (use full source audio)")
     args = parser.parse_args()
 
     if args.drive:
-        run_drive()
+        run_drive(no_mute=args.no_mute)
     elif args.source and os.path.isdir(args.source):
-        run_folder(args.source)
+        run_folder(args.source, no_mute=args.no_mute)
     elif args.source and args.source.endswith(".json"):
-        run_manifest(args.source)
+        run_manifest(args.source, no_mute=args.no_mute)
     elif args.source and args.recording:
         run_local(args.source, args.recording, args.output)
     else:
