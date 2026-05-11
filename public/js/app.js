@@ -401,7 +401,7 @@ function startRecording() {
   const mimeType = getMimeType();
   state.webcamMime = mimeType || 'video/webm';
 
-  const recordStream = mirrorState ? createMirroredStream() : webcamStream;
+  const recordStream = webcamStream;
   mediaRecorder = new MediaRecorder(recordStream, {
     mimeType: mimeType || undefined,
     videoBitsPerSecond: 2500000
