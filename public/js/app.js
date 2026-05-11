@@ -809,11 +809,11 @@ function renderVideoList() {
     const statusSpan = document.createElement('span');
     statusSpan.className = 'video-card-status';
     statusSpan.style.color = done ? '#43a047' : '#4fc3f7';
-    statusSpan.textContent = done ? 'Done' : 'Record \u2192';
+    statusSpan.textContent = done ? 'Done \u2713' : 'Record \u2192';
 
     card.appendChild(nameSpan);
     card.appendChild(statusSpan);
-    if (!done) card.addEventListener('click', () => selectVideo(index));
+    card.addEventListener('click', () => selectVideo(index));
     list.appendChild(card);
   });
 }

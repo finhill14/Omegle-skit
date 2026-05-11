@@ -258,13 +258,13 @@ p strong {
 }
 
 .video-card.completed {
-  opacity: 0.4;
+  opacity: 0.6;
 }
 
 .video-card.completed:hover {
-  background: #1a1a1a;
-  border-color: #333;
-  cursor: default;
+  background: #222;
+  border-color: #43a047;
+  cursor: pointer;
 }
 
 .video-card-name {
