@@ -89,6 +89,44 @@ def merge_videos(source_path, recording_path, output_path, mute_regions=None, tr
     if result.returncode == 0:
         return True
 
+    # Attempt 3: source audio only (recording has no audio track)
+    if mute_regions:
+        expr = "+".join(f"between(t,{r['start']},{r['end']})" for r in mute_regions)
+        src_audio = f";[0:a]volume='if({expr},0,1)':eval=frame[a]"
+        a_map = "[a]"
+    else:
+        src_audio = ""
+        a_map = "0:a"
+    cmd3 = [
+        "ffmpeg", "-y", "-i", source_path,
+        *rec_input, "-i", recording_path,
+        "-filter_complex", video_filter + src_audio,
+        "-map", "[v]", "-map", a_map,
+        "-c:v", "libx264", "-preset", "fast", "-crf", "20",
+        "-c:a", "aac", "-b:a", "128k",
+        "-shortest", "-movflags", "+faststart",
+        output_path,
+    ]
+    print(f"  Retrying with source audio only…")
+    result = subprocess.run(cmd3, capture_output=True)
+    if result.returncode == 0:
+        return True
+
+    # Attempt 4: video only, no audio at all
+    cmd4 = [
+        "ffmpeg", "-y", "-i", source_path,
+        *rec_input, "-i", recording_path,
+        "-filter_complex", video_filter,
+        "-map", "[v]", "-an",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "20",
+        "-shortest", "-movflags", "+faststart",
+        output_path,
+    ]
+    print(f"  Retrying with no audio…")
+    result = subprocess.run(cmd4, capture_output=True)
+    if result.returncode == 0:
+        return True
+
     print(f"  FFmpeg failed:\n{result.stderr.decode(errors='replace')}")
     return False
 
