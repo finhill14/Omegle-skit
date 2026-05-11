@@ -29,7 +29,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REC_BOOST = 2.0  # multiply recording (model) audio volume; 2.0 = +6 dB
 
 
-def merge_videos(source_path, recording_path, output_path, mute_regions=None):
+def merge_videos(source_path, recording_path, output_path, mute_regions=None, trim_start=0):
     top_h, bottom_h = 768, 1152
     video_filter = (
         f"[0:v]scale=1080:{top_h}:force_original_aspect_ratio=increase,"
@@ -52,9 +52,12 @@ def merge_videos(source_path, recording_path, output_path, mute_regions=None):
             f"[0:a][ra]amix=inputs=2:duration=shortest[a]"
         )
 
+    rec_input = ["-ss", str(trim_start)] if trim_start > 0 else []
+
     # Attempt 1: full merge with both audio tracks
     cmd = [
-        "ffmpeg", "-y", "-i", source_path, "-i", recording_path,
+        "ffmpeg", "-y", "-i", source_path,
+        *rec_input, "-i", recording_path,
         "-filter_complex", video_filter + ";" + audio_filter,
         "-map", "[v]", "-map", "[a]",
         "-c:v", "libx264", "-preset", "fast", "-crf", "20",
@@ -62,14 +65,18 @@ def merge_videos(source_path, recording_path, output_path, mute_regions=None):
         "-shortest", "-movflags", "+faststart",
         output_path,
     ]
-    print(f"  Merging with both audio tracks…")
+    if trim_start > 0:
+        print(f"  Merging with both audio tracks (recording trimmed at {trim_start}s)…")
+    else:
+        print(f"  Merging with both audio tracks…")
     result = subprocess.run(cmd, capture_output=True)
     if result.returncode == 0:
         return True
 
     # Attempt 2: recording audio only (boosted)
     cmd2 = [
-        "ffmpeg", "-y", "-i", source_path, "-i", recording_path,
+        "ffmpeg", "-y", "-i", source_path,
+        *rec_input, "-i", recording_path,
         "-filter_complex", video_filter + f";[1:a]volume={REC_BOOST}[ra]",
         "-map", "[v]", "-map", "[ra]",
         "-c:v", "libx264", "-preset", "fast", "-crf", "20",
@@ -190,6 +197,15 @@ def match_pairs(source_files, complete_files):
         without_ext = os.path.splitext(f["name"])[0]
         without_raw = without_ext[4:]  # strip 'raw_'
 
+        trim_start = 0
+        try:
+            desc = f.get("description", "")
+            if desc:
+                parsed = json.loads(desc)
+                trim_start = float(parsed.get("trimStart", 0))
+        except Exception:
+            pass
+
         matched_source = None
         username = None
         best_len = 0
@@ -207,22 +223,25 @@ def match_pairs(source_files, complete_files):
                 "source": matched_source,
                 "recording": f,
                 "username": username or "unknown",
+                "trimStart": trim_start,
             })
 
     return pairs
 
 
 # ─── Local mode ────────────────────────────────────────────
-def run_local(source_path, recording_path, output, mute_regions=None):
+def run_local(source_path, recording_path, output, mute_regions=None, trim_start=0):
     base = os.path.splitext(os.path.basename(source_path))[0]
     merged_path = os.path.join(SCRIPT_DIR, f"_merged_{base}.mp4")
     final_path = output or os.path.splitext(source_path)[0] + "_final.mp4"
 
+    parts = [f"Merging: {source_path} + {recording_path}"]
     if mute_regions:
-        print(f"Merging: {source_path} + {recording_path} ({len(mute_regions)} mute regions)")
-    else:
-        print(f"Merging: {source_path} + {recording_path}")
-    if not merge_videos(source_path, recording_path, merged_path, mute_regions):
+        parts.append(f"({len(mute_regions)} mute regions)")
+    if trim_start > 0:
+        parts.append(f"(trim at {trim_start}s)")
+    print(" ".join(parts))
+    if not merge_videos(source_path, recording_path, merged_path, mute_regions, trim_start):
         print(f"\n  Emergency save — raw clips preserved unedited:")
         print(f"    {source_path}")
         print(f"    {recording_path}")
@@ -260,6 +279,7 @@ def run_manifest(manifest_path):
     source_path = os.path.join(manifest_dir, manifest["source"])
     recording_path = os.path.join(manifest_dir, manifest["recording"])
     mute_regions = manifest.get("muteRegions", [])
+    trim_start = manifest.get("trimStart", 0)
 
     if not os.path.isfile(source_path):
         print(f"Source not found: {source_path}")
@@ -270,7 +290,7 @@ def run_manifest(manifest_path):
 
     base = os.path.splitext(os.path.basename(manifest_path))[0]
     output = os.path.join(manifest_dir, f"{base}_captioned.mp4")
-    run_local(source_path, recording_path, output, mute_regions)
+    run_local(source_path, recording_path, output, mute_regions, trim_start)
 
     # run_local only returns on success — safe to delete inputs now
     for p in [source_path, recording_path, manifest_path]:
@@ -326,7 +346,7 @@ def run_drive():
         print("Created 'Omegle Finished' folder")
 
     source_files = list_videos(token, source_id, "files(id,name,mimeType,description)")
-    complete_files = list_videos(token, complete_id)
+    complete_files = list_videos(token, complete_id, "files(id,name,description)")
     pairs = match_pairs(source_files, complete_files)
 
     if not pairs:
@@ -340,6 +360,7 @@ def run_drive():
         src = pair["source"]
         rec = pair["recording"]
         user = pair["username"]
+        trim_start = pair.get("trimStart", 0)
         base = os.path.splitext(src["name"])[0]
 
         print(f"{'=' * 60}")
@@ -356,7 +377,7 @@ def run_drive():
             print("  Downloading recording…")
             download_file(token, rec["id"], rec_path)
 
-            if not merge_videos(src_path, rec_path, merged_path, src.get("muteRegions")):
+            if not merge_videos(src_path, rec_path, merged_path, src.get("muteRegions"), trim_start):
                 failures += 1
                 continue
 

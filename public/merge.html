@@ -339,10 +339,18 @@
               });
 
               setStatus('Building zip…');
+              let trimStart = 0;
+              try {
+                if (file.description) {
+                  const meta = JSON.parse(file.description);
+                  if (meta.trimStart > 0) trimStart = meta.trimStart;
+                }
+              } catch {}
               const manifest = {
                 source: sourceName,
                 recording: recName,
-                muteRegions: source.muteRegions || []
+                muteRegions: source.muteRegions || [],
+                ...(trimStart > 0 ? { trimStart } : {})
               };
               const manifestName = `skit_${username}_${base}.json`;
 
@@ -423,7 +431,7 @@
         statusEl.textContent = 'Loading file lists…';
         const [sourceFiles, completeFiles, progressData] = await Promise.all([
           listVideos(sourceId, 'files(id,name,mimeType,description)'),
-          listVideos(completeId, 'files(id,name,mimeType)'),
+          listVideos(completeId, 'files(id,name,mimeType,description)'),
           loadAllProgress()
         ]);
 

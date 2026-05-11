@@ -396,6 +396,7 @@ function stopCamera() {
 function startRecording() {
   if (!webcamStream) { alert('Camera not available.'); return; }
 
+  state.trimStart = 0;
   recordedChunks = [];
   const mimeType = getMimeType();
   state.webcamMime = mimeType || 'video/webm';
@@ -615,8 +616,9 @@ function stopPreview() {
 
 btnPlayPreview.addEventListener('click', () => {
   if (previewTop.paused) {
+    const trimOff = state.trimStart || 0;
     previewTop.currentTime = 0;
-    previewBottom.currentTime = 0;
+    previewBottom.currentTime = trimOff;
 
     // Resume AudioContext synchronously while inside the user-gesture call stack
     getAudioCtx().resume().catch(() => {});
@@ -628,7 +630,7 @@ btnPlayPreview.addEventListener('click', () => {
     // Webcam audio via AudioContext — if buffer ready, start immediately;
     // if still decoding, start once done (with time offset to stay in sync)
     if (webcamAudioBuffer) {
-      playWebcamAudio(0);
+      playWebcamAudio(trimOff);
     } else if (state.webcamBlob) {
       state.webcamBlob.arrayBuffer()
         .then(ab => getAudioCtx().decodeAudioData(ab))
@@ -643,8 +645,9 @@ btnPlayPreview.addEventListener('click', () => {
     clearSync();
     syncInterval = setInterval(() => {
       if (previewTop.paused || previewTop.ended) { clearSync(); return; }
-      const drift = Math.abs(previewTop.currentTime - previewBottom.currentTime);
-      if (drift > 0.1) previewBottom.currentTime = previewTop.currentTime;
+      const expected = previewTop.currentTime + trimOff;
+      const drift = Math.abs(expected - previewBottom.currentTime);
+      if (drift > 0.15) previewBottom.currentTime = expected;
     }, 500);
   } else {
     stopPreview();
@@ -698,7 +701,16 @@ async function processAndUpload() {
     setProgress(0);
 
     const rawName = `raw_${state.username}_${baseName}.${webcamExt}`;
-    await uploadToDrive(state.webcamBlob, rawName, state.outputFolderId, p => setProgress(p * 100), state.webcamMime.split(';')[0]);
+    const uploadResult = await uploadToDrive(state.webcamBlob, rawName, state.outputFolderId, p => setProgress(p * 100), state.webcamMime.split(';')[0]);
+
+    if (state.trimStart > 0 && uploadResult?.id) {
+      const driveToken = await getDriveToken();
+      fetch(`https://www.googleapis.com/drive/v3/files/${uploadResult.id}?supportsAllDrives=true`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${driveToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ description: JSON.stringify({ trimStart: state.trimStart }) })
+      }).catch(() => {});
+    }
 
     // Update local state + save to Drive (fire and forget)
     state.completedSet.add(sourceVideo.id);
@@ -903,6 +915,88 @@ $('btn-options-back').addEventListener('click', () => {
 $('btn-mirror').addEventListener('click', () => {
   mirrorState = !mirrorState;
   $('webcam-preview').style.transform = mirrorState ? '' : 'scaleX(1)';
+});
+
+// ─── Upload pre-recorded version ─────────────────────────
+$('btn-upload-version').addEventListener('click', () => {
+  $('upload-file-input').value = '';
+  $('upload-file-input').click();
+});
+
+$('upload-file-input').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+
+  state.uploadedUrl = URL.createObjectURL(file);
+  state.webcamBlob = file;
+  state.webcamMime = file.type || 'video/mp4';
+  state.trimStart = 0;
+
+  const video = state.allVideos[state.currentIndex];
+  if (!state.currentVideoBlob) {
+    const btn = $('btn-upload-version');
+    btn.disabled = true;
+    btn.textContent = 'Loading source…';
+    try {
+      state.currentVideoBlob = await downloadFile(video.id);
+      state.currentVideoUrl = URL.createObjectURL(state.currentVideoBlob);
+    } catch (err) {
+      alert('Failed to load source video: ' + err.message);
+      btn.disabled = false;
+      btn.textContent = 'Upload Pre-Recorded Version';
+      return;
+    }
+    btn.disabled = false;
+    btn.textContent = 'Upload Pre-Recorded Version';
+  }
+
+  $('trim-source').src = state.currentVideoUrl;
+  $('trim-upload').src = state.uploadedUrl;
+  $('trim-source').load();
+  $('trim-upload').load();
+
+  $('trim-upload').onloadedmetadata = () => {
+    const dur = $('trim-upload').duration;
+    $('trim-offset').max = Math.max(dur - 1, 0);
+    $('trim-offset').value = 0;
+    $('trim-offset-val').textContent = '0.0s';
+  };
+
+  goTo('screen-upload-trim');
+});
+
+$('trim-offset').addEventListener('input', () => {
+  const val = parseFloat($('trim-offset').value);
+  $('trim-offset-val').textContent = val.toFixed(1) + 's';
+  $('trim-upload').currentTime = val;
+  state.trimStart = val;
+});
+
+$('btn-play-sync').addEventListener('click', () => {
+  const src = $('trim-source');
+  const upl = $('trim-upload');
+  src.currentTime = 0;
+  upl.currentTime = state.trimStart || 0;
+  src.play().catch(() => {});
+  upl.play().catch(() => {});
+});
+
+$('btn-confirm-trim').addEventListener('click', () => {
+  $('trim-source').pause();
+  $('trim-upload').pause();
+  if (state.webcamUrl) URL.revokeObjectURL(state.webcamUrl);
+  state.webcamUrl = state.uploadedUrl;
+  initPreview();
+  goTo('screen-preview');
+});
+
+$('btn-trim-back').addEventListener('click', () => {
+  $('trim-source').pause();
+  $('trim-upload').pause();
+  if (state.uploadedUrl) { URL.revokeObjectURL(state.uploadedUrl); state.uploadedUrl = null; }
+  state.webcamBlob = null;
+  state.trimStart = 0;
+  goTo('screen-video-options');
 });
 
 async function loadCurrentVideo() {
