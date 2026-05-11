@@ -82,6 +82,8 @@
           <button id="btn-preview-lines" class="btn">Preview Conversation / Learn Lines</button>
           <button id="btn-download-clip" class="btn btn-secondary">Download Clip</button>
           <button id="btn-start-record" class="btn btn-approve">Record Your Version</button>
+          <button id="btn-upload-version" class="btn btn-secondary">Upload Pre-Recorded Version</button>
+          <input id="upload-file-input" type="file" accept="video/*" hidden>
           <button id="btn-options-back" class="btn btn-secondary">Back</button>
         </div>
       </div>
@@ -112,6 +114,34 @@
         <span id="rec-timer" class="timer" hidden>00:00</span>
       </div>
       <p class="tip">Their video is muted during recording — watch for visual cues</p>
+    </section>
+
+    <!-- Upload Trim -->
+    <section id="screen-upload-trim" class="screen">
+      <h2>Align Your Upload</h2>
+      <div class="video-stack">
+        <div class="video-half video-top">
+          <video id="trim-source" playsinline></video>
+          <span class="video-label">Their Video</span>
+        </div>
+        <div class="video-half video-bottom">
+          <video id="trim-upload" playsinline></video>
+          <span class="video-label">Your Upload</span>
+        </div>
+      </div>
+      <div style="padding:0.75rem 0.5rem;text-align:center">
+        <label style="color:#888;font-size:0.85rem;display:flex;align-items:center;gap:0.5rem">
+          Start at:
+          <input id="trim-offset" type="range" min="0" step="0.1" value="0" style="flex:1">
+          <span id="trim-offset-val" style="color:#4fc3f7;font-weight:600;min-width:3rem">0.0s</span>
+        </label>
+      </div>
+      <div class="controls">
+        <button id="btn-play-sync" class="btn">Play Sync</button>
+        <button id="btn-confirm-trim" class="btn btn-approve">Confirm</button>
+        <button id="btn-trim-back" class="btn btn-secondary">Back</button>
+      </div>
+      <p class="tip">Scrub to where your reaction starts, then Play Sync to check alignment</p>
     </section>
 
     <!-- Preview -->
