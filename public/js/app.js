@@ -927,6 +927,24 @@ $('upload-file-input').addEventListener('change', async (e) => {
   const file = e.target.files[0];
   if (!file) return;
 
+  // Check if the file has audio — iOS Safari sometimes strips it during transcoding
+  const hasAudio = await new Promise(resolve => {
+    const v = document.createElement('video');
+    v.preload = 'metadata';
+    v.muted = true;
+    v.playsInline = true;
+    v.src = URL.createObjectURL(file);
+    v.onloadedmetadata = () => {
+      let audio = true;
+      if (v.audioTracks) audio = v.audioTracks.length > 0;
+      URL.revokeObjectURL(v.src);
+      resolve(audio);
+    };
+    v.onerror = () => { URL.revokeObjectURL(v.src); resolve(true); };
+    setTimeout(() => resolve(true), 3000);
+  });
+  if (!hasAudio && !confirm('This video has no audio track — your voice won\'t be in the final video. Continue anyway?')) return;
+
   state.uploadedUrl = URL.createObjectURL(file);
   state.webcamBlob = file;
   state.webcamMime = file.type || 'video/mp4';
