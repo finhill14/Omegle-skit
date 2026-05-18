@@ -32,9 +32,9 @@ REC_BOOST = 2.0  # multiply recording (model) audio volume; 2.0 = +6 dB
 def merge_videos(source_path, recording_path, output_path, mute_regions=None, trim_start=0):
     top_h, bottom_h = 768, 1152
     video_filter = (
-        f"[0:v]scale=1080:{top_h}:force_original_aspect_ratio=increase,"
+        f"[0:v]fps=30,scale=1080:{top_h}:force_original_aspect_ratio=increase,"
         f"crop=1080:{top_h},setsar=1[top];"
-        f"[1:v]scale=1080:{bottom_h}:force_original_aspect_ratio=increase,"
+        f"[1:v]fps=30,scale=1080:{bottom_h}:force_original_aspect_ratio=increase,"
         f"crop=1080:{bottom_h},setsar=1[bottom];"
         f"[top][bottom]vstack=inputs=2[v]"
     )
