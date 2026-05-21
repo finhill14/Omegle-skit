@@ -422,7 +422,10 @@ function startRecording() {
 
   mediaRecorder.start(1000);
   prerecordedVideo.currentTime = 0;
-  prerecordedVideo.muted = true;
+  prerecordedVideo.muted = false;
+  setupRecAudio();
+  getAudioCtx().resume().catch(() => {});
+  scheduleRecGain(0);
   prerecordedVideo.play().catch(() => {});
 
   isRecording = true;
@@ -447,7 +450,7 @@ function stopRecording() {
   if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
   stopMirroredStream();
   prerecordedVideo.pause();
-  prerecordedVideo.muted = false;
+  if (recAudioGain) recAudioGain.gain.setValueAtTime(0, getAudioCtx().currentTime);
   isRecording = false;
   btnRecord.textContent = 'Start Recording';
   btnRecord.classList.remove('recording');
@@ -507,6 +510,10 @@ let webcamAudioBuffer = null;
 let webcamAudioSource = null;
 let previewTopSource = null;
 let previewTopGain = null;
+let recAudioSource = null;
+let recAudioGain = null;
+let hearAudioOn = false;
+const REC_AUDIO_VOLUME = 0.25;
 
 function getAudioCtx() {
   if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -527,6 +534,42 @@ function playWebcamAudio(offset = 0) {
   webcamAudioSource.buffer = webcamAudioBuffer;
   webcamAudioSource.connect(getAudioCtx().destination);
   webcamAudioSource.start(0, offset);
+}
+
+function setupRecAudio() {
+  if (recAudioSource) return;
+  try {
+    const ctx = getAudioCtx();
+    recAudioSource = ctx.createMediaElementSource(prerecordedVideo);
+    recAudioGain = ctx.createGain();
+    recAudioGain.gain.value = 0;
+    recAudioSource.connect(recAudioGain);
+    recAudioGain.connect(ctx.destination);
+  } catch (e) {
+    console.warn('Rec audio setup failed:', e);
+    recAudioSource = null;
+    recAudioGain = null;
+  }
+}
+
+function scheduleRecGain(fromVideoTime) {
+  const muteRegions = state.allVideos[state.currentIndex]?.muteRegions || [];
+  if (!recAudioGain || !audioCtx) return;
+  const t0 = audioCtx.currentTime;
+  recAudioGain.gain.cancelScheduledValues(t0);
+  if (!hearAudioOn) {
+    recAudioGain.gain.setValueAtTime(0, t0);
+    return;
+  }
+  const inMute = muteRegions.some(r => fromVideoTime >= r.start && fromVideoTime <= r.end);
+  recAudioGain.gain.setValueAtTime(inMute ? 0 : REC_AUDIO_VOLUME, t0);
+  for (const r of muteRegions) {
+    if (r.end <= fromVideoTime) continue;
+    const rStart = t0 + Math.max(0, r.start - fromVideoTime);
+    const rEnd   = t0 + (r.end - fromVideoTime);
+    if (r.start > fromVideoTime) recAudioGain.gain.setValueAtTime(0, rStart);
+    recAudioGain.gain.setValueAtTime(REC_AUDIO_VOLUME, rEnd);
+  }
 }
 
 function setupPreviewTopAudio() {
@@ -910,6 +953,18 @@ $('btn-start-record').addEventListener('click', () => {
 $('btn-options-back').addEventListener('click', () => {
   cleanupPreview();
   goTo('screen-select');
+});
+
+$('btn-hear-audio').addEventListener('click', () => {
+  hearAudioOn = !hearAudioOn;
+  $('btn-hear-audio').textContent = hearAudioOn ? 'Audio: On' : 'Audio: Off';
+  if (recAudioGain && audioCtx) {
+    if (isRecording) {
+      scheduleRecGain(prerecordedVideo.currentTime);
+    } else {
+      recAudioGain.gain.setValueAtTime(0, audioCtx.currentTime);
+    }
+  }
 });
 
 $('btn-mirror').addEventListener('click', () => {
