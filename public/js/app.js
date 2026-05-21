@@ -422,11 +422,17 @@ function startRecording() {
 
   mediaRecorder.start(1000);
   prerecordedVideo.currentTime = 0;
-  prerecordedVideo.muted = false;
   setupRecAudio();
-  getAudioCtx().resume().catch(() => {});
-  scheduleRecGain(0);
-  prerecordedVideo.play().catch(() => {});
+  if (recAudioSource) {
+    prerecordedVideo.muted = false;
+    getAudioCtx().resume().catch(() => {});
+    prerecordedVideo.play()
+      .then(() => { if (hearAudioOn) scheduleRecGain(0); })
+      .catch(() => {});
+  } else {
+    prerecordedVideo.muted = true;
+    prerecordedVideo.play().catch(() => {});
+  }
 
   isRecording = true;
   btnRecord.textContent = 'Stop Recording';
@@ -959,7 +965,8 @@ $('btn-hear-audio').addEventListener('click', () => {
   hearAudioOn = !hearAudioOn;
   $('btn-hear-audio').textContent = hearAudioOn ? 'Audio: On' : 'Audio: Off';
   if (recAudioGain && audioCtx) {
-    if (isRecording) {
+    audioCtx.resume().catch(() => {});
+    if (isRecording && !prerecordedVideo.paused) {
       scheduleRecGain(prerecordedVideo.currentTime);
     } else {
       recAudioGain.gain.setValueAtTime(0, audioCtx.currentTime);
