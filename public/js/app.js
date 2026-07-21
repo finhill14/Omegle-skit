@@ -518,7 +518,7 @@ let previewTopSource = null;
 let previewTopGain = null;
 let recAudioSource = null;
 let recAudioGain = null;
-let hearAudioOn = false;
+let hearAudioOn = true;
 const REC_AUDIO_VOLUME = 0.25;
 
 function getAudioCtx() {
