@@ -136,8 +136,8 @@ async function findOrCreateFolder(name) {
 async function listVideos(folderId) {
   const data = await driveGet('/files', {
     q: `'${folderId}' in parents and mimeType contains 'video/' and trashed=false`,
-    fields: 'files(id,name,mimeType,description)',
-    orderBy: 'name',
+    fields: 'files(id,name,mimeType,description,createdTime)',
+    orderBy: 'createdTime',
     pageSize: '1000',
     supportsAllDrives: 'true',
     includeItemsFromAllDrives: 'true'
@@ -819,7 +819,7 @@ async function loadVideoList() {
           if (Array.isArray(parsed.muteRegions)) muteRegions = parsed.muteRegions;
         }
       } catch {}
-      return { ...v, muteRegions };
+      return { ...v, muteRegions, createdTime: v.createdTime || null };
     });
     state.completedSet = new Set(completed);
 
@@ -851,16 +851,29 @@ function renderVideoList() {
     const card = document.createElement('button');
     card.className = `video-card${done ? ' completed' : ''}`;
 
+    const nameWrap = document.createElement('span');
+    nameWrap.style.cssText = 'display:flex;flex-direction:column;overflow:hidden';
+
     const nameSpan = document.createElement('span');
     nameSpan.className = 'video-card-name';
     nameSpan.textContent = `Video ${index + 1}`;
+    nameWrap.appendChild(nameSpan);
+
+    if (video.createdTime) {
+      const d = new Date(video.createdTime);
+      const dateStr = d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+      const dateSpan = document.createElement('span');
+      dateSpan.style.cssText = 'font-size:0.7rem;color:#555;margin-top:1px';
+      dateSpan.textContent = 'Added ' + dateStr;
+      nameWrap.appendChild(dateSpan);
+    }
 
     const statusSpan = document.createElement('span');
     statusSpan.className = 'video-card-status';
     statusSpan.style.color = done ? '#43a047' : '#4fc3f7';
     statusSpan.textContent = done ? 'Done \u2713' : 'Record \u2192';
 
-    card.appendChild(nameSpan);
+    card.appendChild(nameWrap);
     card.appendChild(statusSpan);
     card.addEventListener('click', () => selectVideo(index));
     list.appendChild(card);
