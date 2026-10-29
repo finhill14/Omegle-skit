@@ -41,6 +41,29 @@
     .model-bar-done { height: 100%; background: #43a047; border-radius: 3px; transition: width 0.3s; }
     .model-count { color: #888; font-size: 0.82rem; min-width: 45px; text-align: right; }
     .model-count.full { color: #43a047; }
+    #video-views { margin-bottom: 1.25rem; }
+    .views-section { background: #111; border: 1px solid #222; border-radius: 8px; padding: 1rem; }
+    .views-section-title { font-size: 1rem; font-weight: 600; color: #fff; margin-bottom: 0.75rem; display: flex; justify-content: space-between; align-items: center; }
+    .views-section-title span { font-size: 0.75rem; font-weight: 400; color: #555; }
+    .views-video-row { border-top: 1px solid #1a1a1a; padding: 0.6rem 0 0; margin-top: 0.5rem; }
+    .views-video-header { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.4rem; }
+    .views-vid-num { font-weight: 600; font-size: 0.9rem; color: #fff; min-width: 60px; }
+    .views-preview-btn { background: #1a1a1a; border: 1px solid #333; border-radius: 5px; color: #4fc3f7; font-size: 0.78rem; padding: 0.25rem 0.6rem; cursor: pointer; white-space: nowrap; }
+    .views-preview-btn:hover { background: #222; }
+    .views-player { width: 100%; max-height: 180px; border-radius: 5px; background: #000; margin-bottom: 0.4rem; display: none; }
+    .views-model-inputs { display: flex; flex-direction: column; gap: 0.3rem; margin-bottom: 0.4rem; }
+    .views-model-input-row { display: flex; align-items: center; gap: 0.5rem; }
+    .views-model-label { color: #4fc3f7; font-size: 0.82rem; font-weight: 600; min-width: 90px; }
+    .views-num-input { background: #1a1a1a; border: 1px solid #333; border-radius: 5px; color: #fff; font-size: 0.85rem; padding: 0.25rem 0.5rem; width: 90px; text-align: right; }
+    .views-num-input:focus { outline: none; border-color: #4fc3f7; }
+    .views-add-row { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.2rem; }
+    .views-text-input { background: #1a1a1a; border: 1px solid #333; border-radius: 5px; color: #fff; font-size: 0.82rem; padding: 0.25rem 0.5rem; width: 110px; }
+    .views-text-input:focus { outline: none; border-color: #4fc3f7; }
+    .views-text-input::placeholder { color: #444; }
+    .views-save-btn { background: #1565c0; border: none; border-radius: 5px; color: #fff; font-size: 0.8rem; font-weight: 600; padding: 0.3rem 0.8rem; cursor: pointer; white-space: nowrap; }
+    .views-save-btn:hover { background: #1976d2; }
+    .views-save-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .views-save-ok { font-size: 0.75rem; color: #43a047; margin-left: 0.4rem; }
   </style>
 </head>
 <body>
@@ -48,6 +71,7 @@
   <p class="subtitle">Run <code>python3 captions/watch.py</code> once — it auto-processes every zip you download. Or manually: extract zip into <code>captions/</code> and run <code>python3 captions/process.py captions/&lt;folder&gt;</code></p>
   <p id="page-status">Connecting to Drive…</p>
   <div id="model-progress"></div>
+  <div id="video-views"></div>
   <div id="pairs-container"></div>
 
   <script type="module">
@@ -151,6 +175,222 @@
       const fileRes = await fetch(`${DRIVE_API}/files/${data.files[0].id}?alt=media`, { headers: { Authorization: `Bearer ${token}` } });
       if (!fileRes.ok) return {};
       try { return await fileRes.json(); } catch { return {}; }
+    }
+
+    // ─── Views file ───────────────────────────────────────
+    let _viewsFileId = null;
+
+    async function loadViewsData() {
+      const token = await getToken();
+      const params = new URLSearchParams({
+        q: "name='omegle-views.json' and trashed=false",
+        fields: 'files(id)',
+        spaces: 'drive'
+      });
+      const res = await fetch(`${DRIVE_API}/files?${params}`, { headers: { Authorization: `Bearer ${token}` } });
+      const data = await res.json();
+      if (!data.files?.length) return {};
+      _viewsFileId = data.files[0].id;
+      const fileRes = await fetch(`${DRIVE_API}/files/${_viewsFileId}?alt=media`, { headers: { Authorization: `Bearer ${token}` } });
+      if (!fileRes.ok) return {};
+      try { return await fileRes.json(); } catch { return {}; }
+    }
+
+    async function saveViewsData(data) {
+      const token = await getToken();
+      const UPLOAD_API = 'https://www.googleapis.com/upload/drive/v3';
+      if (_viewsFileId) {
+        await fetch(`${UPLOAD_API}/files/${_viewsFileId}?uploadType=media`, {
+          method: 'PATCH',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify(data)
+        });
+      } else {
+        const boundary = 'omegleViewsBoundary';
+        const metadata = JSON.stringify({ name: 'omegle-views.json', mimeType: 'application/json' });
+        const content = JSON.stringify(data);
+        const body = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${metadata}\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n${content}\r\n--${boundary}--`;
+        const res = await fetch(`${UPLOAD_API}/files?uploadType=multipart`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': `multipart/related; boundary="${boundary}"` },
+          body
+        });
+        const created = await res.json();
+        _viewsFileId = created.id;
+      }
+    }
+
+    function renderViewsTracker(sourceFiles, progressData, viewsData) {
+      const container = document.getElementById('video-views');
+      container.innerHTML = '';
+      if (!sourceFiles.length) return;
+
+      const allModels = [...new Set(Object.keys(progressData))].sort();
+      const section = document.createElement('div');
+      section.className = 'views-section';
+
+      const titleRow = document.createElement('div');
+      titleRow.className = 'views-section-title';
+      titleRow.innerHTML = 'Video Views <span>Track view counts — models see these next to their completed videos</span>';
+      section.appendChild(titleRow);
+
+      sourceFiles.forEach((src, idx) => {
+        const videoViews = viewsData[src.id] || {};
+
+        const block = document.createElement('div');
+        block.className = 'views-video-row';
+
+        // Header row: Video N + preview toggle
+        const header = document.createElement('div');
+        header.className = 'views-video-header';
+
+        const numEl = document.createElement('span');
+        numEl.className = 'views-vid-num';
+        numEl.textContent = `Video ${idx + 1}`;
+
+        const previewBtn = document.createElement('button');
+        previewBtn.className = 'views-preview-btn';
+        previewBtn.textContent = '▶ Preview';
+
+        const player = document.createElement('video');
+        player.className = 'views-player';
+        player.controls = true;
+        player.playsinline = true;
+        let playerLoaded = false;
+
+        previewBtn.addEventListener('click', async () => {
+          if (player.style.display === 'block') {
+            player.pause();
+            player.style.display = 'none';
+            previewBtn.textContent = '▶ Preview';
+            return;
+          }
+          player.style.display = 'block';
+          previewBtn.textContent = '✕ Close';
+          if (!playerLoaded) {
+            playerLoaded = true;
+            previewBtn.textContent = 'Loading…';
+            try {
+              const token = await getToken();
+              const blob = await downloadBlob(src.id);
+              player.src = URL.createObjectURL(blob);
+              previewBtn.textContent = '✕ Close';
+            } catch (e) {
+              previewBtn.textContent = 'Error';
+              player.style.display = 'none';
+            }
+          }
+        });
+
+        header.appendChild(numEl);
+        header.appendChild(previewBtn);
+        block.appendChild(header);
+        block.appendChild(player);
+
+        // Per-model input rows
+        const inputsWrap = document.createElement('div');
+        inputsWrap.className = 'views-model-inputs';
+
+        const localViews = { ...videoViews };
+
+        const getOrCreateRow = (modelName) => {
+          const row = document.createElement('div');
+          row.className = 'views-model-input-row';
+          const label = document.createElement('span');
+          label.className = 'views-model-label';
+          label.textContent = modelName;
+          const input = document.createElement('input');
+          input.type = 'number';
+          input.className = 'views-num-input';
+          input.min = '0';
+          input.value = localViews[modelName] != null ? localViews[modelName] : '';
+          input.placeholder = '0';
+          input.addEventListener('input', () => {
+            const v = parseInt(input.value);
+            if (!isNaN(v) && v >= 0) localViews[modelName] = v;
+            else delete localViews[modelName];
+          });
+          row.appendChild(label);
+          row.appendChild(input);
+          inputsWrap.appendChild(row);
+        };
+
+        // Show models that have recorded this video, plus any already in viewsData
+        const modelsForVideo = new Set([
+          ...(progressData[src.id] ? [] : []), // progressData keyed by username, not videoId
+          ...Object.keys(videoViews)
+        ]);
+        // Also show models whose progress includes this video id
+        Object.entries(progressData).forEach(([modelName, ids]) => {
+          if (Array.isArray(ids) && ids.includes(src.id)) modelsForVideo.add(modelName);
+        });
+        [...modelsForVideo].sort().forEach(getOrCreateRow);
+
+        block.appendChild(inputsWrap);
+
+        // Add model row
+        const addRow = document.createElement('div');
+        addRow.className = 'views-add-row';
+
+        const modelInput = document.createElement('input');
+        modelInput.type = 'text';
+        modelInput.className = 'views-text-input';
+        modelInput.placeholder = 'Model name…';
+
+        const viewsInput = document.createElement('input');
+        viewsInput.type = 'number';
+        viewsInput.className = 'views-num-input';
+        viewsInput.placeholder = 'Views';
+        viewsInput.min = '0';
+        viewsInput.style.width = '80px';
+
+        const addBtn = document.createElement('button');
+        addBtn.className = 'views-preview-btn';
+        addBtn.textContent = '+ Add';
+        addBtn.addEventListener('click', () => {
+          const name = modelInput.value.trim();
+          const count = parseInt(viewsInput.value);
+          if (!name || isNaN(count) || count < 0) return;
+          localViews[name] = count;
+          modelInput.value = '';
+          viewsInput.value = '';
+          getOrCreateRow(name);
+        });
+
+        const saveBtn = document.createElement('button');
+        saveBtn.className = 'views-save-btn';
+        saveBtn.textContent = 'Save';
+        const saveOk = document.createElement('span');
+        saveOk.className = 'views-save-ok';
+
+        saveBtn.addEventListener('click', async () => {
+          saveBtn.disabled = true;
+          saveBtn.textContent = 'Saving…';
+          saveOk.textContent = '';
+          try {
+            viewsData[src.id] = { ...localViews };
+            await saveViewsData(viewsData);
+            saveBtn.textContent = 'Save';
+            saveOk.textContent = '✓ Saved';
+            setTimeout(() => { saveOk.textContent = ''; }, 2000);
+          } catch (e) {
+            saveBtn.textContent = 'Error';
+            console.error(e);
+          }
+          saveBtn.disabled = false;
+        });
+
+        addRow.appendChild(modelInput);
+        addRow.appendChild(viewsInput);
+        addRow.appendChild(addBtn);
+        addRow.appendChild(saveBtn);
+        addRow.appendChild(saveOk);
+        block.appendChild(addRow);
+
+        section.appendChild(block);
+      });
+
+      container.appendChild(section);
     }
 
     async function createDriveFolder(name) {
@@ -429,16 +669,18 @@
         }
 
         statusEl.textContent = 'Loading file lists…';
-        const [sourceFiles, completeFiles, progressData] = await Promise.all([
+        const [sourceFiles, completeFiles, progressData, viewsData] = await Promise.all([
           listVideos(sourceId, 'files(id,name,mimeType,description)'),
           listVideos(completeId, 'files(id,name,mimeType,description)'),
-          loadAllProgress()
+          loadAllProgress(),
+          loadViewsData()
         ]);
 
         const groups = buildGroups(sourceFiles, completeFiles);
         const total = groups.reduce((n, g) => n + g.recordings.length, 0);
         statusEl.textContent = `${groups.length} source video${groups.length !== 1 ? 's' : ''}, ${total} recording${total !== 1 ? 's' : ''} ready.`;
         renderModelProgress(progressData, sourceFiles.length);
+        renderViewsTracker(sourceFiles, progressData, viewsData);
         render(groups, sourceFiles);
       } catch (err) {
         statusEl.textContent = 'Error: ' + err.message;

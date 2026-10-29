@@ -23,7 +23,8 @@ const state = {
   webcamUrl: null,
   webcamMime: 'video/webm',
   ffmpeg: null,
-  ffmpegLoaded: false
+  ffmpegLoaded: false,
+  viewsData: {}
 };
 
 // ─── DOM Helpers ─────────────────────────────────────────
@@ -793,12 +794,15 @@ async function loadVideoList() {
 
     $('loading-status').textContent = 'Loading video list...';
 
-    const [sourceVideos, originalVideos, progressRes] = await Promise.all([
+    const [sourceVideos, originalVideos, progressRes, viewsRes] = await Promise.all([
       listVideos(sourceId),
       listVideos(originalsId),
       fetch('/api/progress', {
         headers: { Authorization: `Bearer ${state.sessionToken}` }
-      })
+      }),
+      fetch('/api/views', {
+        headers: { Authorization: `Bearer ${state.sessionToken}` }
+      }).catch(() => null)
     ]);
 
     state.originalMap = {};
@@ -811,6 +815,10 @@ async function loadVideoList() {
     }
 
     const { completed } = await progressRes.json();
+    try {
+      const viewsData = viewsRes?.ok ? await viewsRes.json() : { views: {} };
+      state.viewsData = viewsData.views || {};
+    } catch { state.viewsData = {}; }
     state.allVideos = sourceVideos.map(v => {
       let muteRegions = [];
       try {
@@ -866,6 +874,17 @@ function renderVideoList() {
       dateSpan.style.cssText = 'font-size:0.7rem;color:#555;margin-top:1px';
       dateSpan.textContent = 'Added ' + dateStr;
       nameWrap.appendChild(dateSpan);
+    }
+
+    if (done) {
+      const myViews = state.viewsData?.[video.id]?.[state.username];
+      if (myViews != null) {
+        const viewSpan = document.createElement('span');
+        viewSpan.style.cssText = 'font-size:0.7rem;color:#555;margin-top:1px';
+        const k = myViews >= 1000 ? (myViews / 1000).toFixed(1).replace(/\.0$/, '') + 'K' : String(myViews);
+        viewSpan.textContent = k + ' views';
+        nameWrap.appendChild(viewSpan);
+      }
     }
 
     const statusSpan = document.createElement('span');
