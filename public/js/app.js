@@ -880,7 +880,7 @@ function renderVideoList() {
       const myViews = state.viewsData?.[video.id]?.[state.username];
       if (myViews != null) {
         const viewSpan = document.createElement('span');
-        viewSpan.style.cssText = 'font-size:0.7rem;color:#555;margin-top:1px';
+        viewSpan.style.cssText = 'font-size:0.75rem;font-weight:700;color:#ff9800;margin-top:2px';
         const k = myViews >= 1000 ? (myViews / 1000).toFixed(1).replace(/\.0$/, '') + 'K' : String(myViews);
         viewSpan.textContent = k + ' views';
         nameWrap.appendChild(viewSpan);
